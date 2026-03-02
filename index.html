@@ -122,7 +122,10 @@
 
             for (let y = 0; y < rows; y++) {
                 for (let x = 0; x < cols; x++) {
-                    ctx.fillStyle = grid[y][x] ? '#2563eb' : '#e7eef9';
+                    const value = clamp01(grid[y][x][0]);
+                    const hue = 210 + value * 60;
+                    const lightness = 14 + value * 72;
+                    ctx.fillStyle = `hsl(${hue}, 80%, ${lightness}%)`;
                     ctx.fillRect(x * cellSize, y * cellSize, cellSize - 1, cellSize - 1);
                 }
             }
