@@ -86,8 +86,10 @@
                 <button id="toggleBtn" type="button">Start</button>
                 <button id="stepBtn" type="button">Step</button>
                 <button id="randomBtn" type="button">Randomize</button>
+                <button id="ruleBtn" type="button">Random Rule</button>
                 <button id="clearBtn" type="button">Clear</button>
             </div>
+            <p id="ruleLabel" aria-live="polite"></p>
         </section>
 
         <footer>
@@ -101,16 +103,39 @@
         const toggleBtn = document.getElementById('toggleBtn');
         const stepBtn = document.getElementById('stepBtn');
         const randomBtn = document.getElementById('randomBtn');
+        const ruleBtn = document.getElementById('ruleBtn');
         const clearBtn = document.getElementById('clearBtn');
+        const ruleLabel = document.getElementById('ruleLabel');
 
         const cellSize = 16;
         const cols = Math.floor(canvas.width / cellSize);
         const rows = Math.floor(canvas.height / cellSize);
 
         const channelsPerCell = 16;
+        const neighborCounts = [0, 1, 2, 3, 4, 5, 6, 7, 8];
         let running = false;
         let grid = createGrid(false);
         let timer = null;
+        let rule = createRandomRule();
+
+        function createRandomRule() {
+            const births = neighborCounts.filter(() => Math.random() < 0.35);
+            const survives = neighborCounts.filter(() => Math.random() < 0.35);
+
+            const sanitizedBirths = births.length === 0 ? [3] : births;
+            const sanitizedSurvives = survives.length === 0 ? [2, 3] : survives;
+
+            return {
+                births: new Set(sanitizedBirths),
+                survives: new Set(sanitizedSurvives)
+            };
+        }
+
+        function updateRuleLabel() {
+            const birthText = [...rule.births].sort((a, b) => a - b).join('');
+            const surviveText = [...rule.survives].sort((a, b) => a - b).join('');
+            ruleLabel.textContent = `Rule: B${birthText}/S${surviveText}`;
+        }
 
         function createGrid(randomize = false) {
             return Array.from({ length: rows }, () =>
@@ -173,7 +198,9 @@
                 for (let x = 0; x < cols; x++) {
                     const alive = grid[y][x][0] === 1;
                     const neighbors = countNeighbors(x, y);
-                    const nextValue = neighbors === 3 || (alive && neighbors === 2) ? 1 : 0;
+                    const nextValue = alive
+                        ? (rule.survives.has(neighbors) ? 1 : 0)
+                        : (rule.births.has(neighbors) ? 1 : 0);
 
                     for (let c = channelsPerCell - 1; c > 0; c--) {
                         next[y][x][c] = grid[y][x][c - 1];
@@ -241,6 +268,12 @@
             draw();
         });
 
+        ruleBtn.addEventListener('click', () => {
+            rule = createRandomRule();
+            updateRuleLabel();
+        });
+
+        updateRuleLabel();
         draw();
     </script>
 </body>
