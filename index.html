@@ -48,11 +48,6 @@
             gap: 8px;
             margin-top: 12px;
         }
-        .rule-note {
-            margin-top: 10px;
-            font-size: 0.86rem;
-            color: #64748b;
-        }
         button {
             border: 1px solid #cbd5e1;
             background: #f8fafc;
@@ -83,18 +78,16 @@
     <div class="container">
         <h1>🚧 Site Under Construction</h1>
         <p>This GitHub Pages site is coming soon.</p>
-        <p>Try a 16-channel cellular automata mini-game while you wait.</p>
+        <p>Try the mini Game of Life below while you wait.</p>
 
-        <section class="game" aria-label="Multi-channel cellular automata">
+        <section class="game" aria-label="Conway's Game of Life">
             <canvas id="gameCanvas" width="480" height="320"></canvas>
             <div class="controls">
                 <button id="toggleBtn" type="button">Start</button>
                 <button id="stepBtn" type="button">Step</button>
-                <button id="randomBtn" type="button">Randomize Cells</button>
-                <button id="ruleBtn" type="button">Randomize Rule</button>
+                <button id="randomBtn" type="button">Randomize</button>
                 <button id="clearBtn" type="button">Clear</button>
             </div>
-            <div id="ruleNote" class="rule-note">Rule: smooth activator-diffuser (default)</div>
         </section>
 
         <footer>
@@ -103,67 +96,25 @@
     </div>
 
     <script>
-        const CHANNELS = 16;
-        const cellSize = 16;
-        const dt = 0.18;
-
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
         const toggleBtn = document.getElementById('toggleBtn');
         const stepBtn = document.getElementById('stepBtn');
         const randomBtn = document.getElementById('randomBtn');
-        const ruleBtn = document.getElementById('ruleBtn');
         const clearBtn = document.getElementById('clearBtn');
-        const ruleNote = document.getElementById('ruleNote');
 
+        const cellSize = 16;
         const cols = Math.floor(canvas.width / cellSize);
         const rows = Math.floor(canvas.height / cellSize);
 
         let running = false;
-        let timer = null;
         let grid = createGrid(false);
-
-        let rule = createDefaultRule();
-
-        function createCell(randomize = false) {
-            const cell = new Array(CHANNELS).fill(0);
-            if (randomize) {
-                for (let c = 0; c < CHANNELS; c++) {
-                    cell[c] = Math.random();
-                }
-            }
-            return cell;
-        }
+        let timer = null;
 
         function createGrid(randomize = false) {
             return Array.from({ length: rows }, () =>
-                Array.from({ length: cols }, () => createCell(randomize))
+                Array.from({ length: cols }, () => (randomize ? Math.random() < 0.28 : false))
             );
-        }
-
-        function clamp01(value) {
-            return Math.max(0, Math.min(1, value));
-        }
-
-        function createDefaultRule() {
-            return {
-                self: Array.from({ length: CHANNELS }, (_, c) => 0.08 - c * 0.002),
-                neighbor: Array.from({ length: CHANNELS }, (_, c) => 0.62 - c * 0.015),
-                bias: Array.from({ length: CHANNELS }, (_, c) => (c === 0 ? -0.015 : -0.005)),
-                driveFromViz: Array.from({ length: CHANNELS }, (_, c) => (c === 0 ? 0.0 : 0.18 - c * 0.008)),
-                vizFeedback: Array.from({ length: CHANNELS }, (_, c) => (c === 0 ? 0.0 : 0.05 - c * 0.002))
-            };
-        }
-
-        function randomizeRule() {
-            rule = {
-                self: Array.from({ length: CHANNELS }, () => (Math.random() - 0.5) * 0.35),
-                neighbor: Array.from({ length: CHANNELS }, () => 0.15 + Math.random() * 0.9),
-                bias: Array.from({ length: CHANNELS }, () => (Math.random() - 0.5) * 0.06),
-                driveFromViz: Array.from({ length: CHANNELS }, () => (Math.random() - 0.3) * 0.4),
-                vizFeedback: Array.from({ length: CHANNELS }, () => (Math.random() - 0.5) * 0.25)
-            };
-            ruleNote.textContent = `Rule: randomized (${Math.floor(Math.random() * 100000)})`;
         }
 
         function draw() {
@@ -180,10 +131,8 @@
             }
         }
 
-        function computeNeighborhoodAverage(x, y) {
-            const avg = new Array(CHANNELS).fill(0);
-            let samples = 0;
-
+        function countNeighbors(x, y) {
+            let count = 0;
             for (let dy = -1; dy <= 1; dy++) {
                 for (let dx = -1; dx <= 1; dx++) {
                     if (dx === 0 && dy === 0) {
@@ -192,37 +141,23 @@
 
                     const nx = (x + dx + cols) % cols;
                     const ny = (y + dy + rows) % rows;
-                    const cell = grid[ny][nx];
-                    for (let c = 0; c < CHANNELS; c++) {
-                        avg[c] += cell[c];
+                    if (grid[ny][nx]) {
+                        count++;
                     }
-                    samples++;
                 }
             }
-
-            for (let c = 0; c < CHANNELS; c++) {
-                avg[c] /= samples;
-            }
-            return avg;
+            return count;
         }
 
-        function stepAutomata() {
+        function nextGeneration() {
             const next = createGrid(false);
 
             for (let y = 0; y < rows; y++) {
                 for (let x = 0; x < cols; x++) {
-                    const current = grid[y][x];
-                    const neighborhood = computeNeighborhoodAverage(x, y);
-                    const viz = current[0];
+                    const alive = grid[y][x];
+                    const neighbors = countNeighbors(x, y);
 
-                    for (let c = 0; c < CHANNELS; c++) {
-                        const selfTerm = rule.self[c] * current[c];
-                        const diffusion = rule.neighbor[c] * (neighborhood[c] - current[c]);
-                        const fromViz = rule.driveFromViz[c] * (viz - 0.5);
-                        const toViz = c === 0 ? neighborhood.slice(1).reduce((sum, val, idx) => sum + val * rule.vizFeedback[idx + 1], 0) : 0;
-                        const delta = selfTerm + diffusion + fromViz + toViz + rule.bias[c];
-                        next[y][x][c] = clamp01(current[c] + dt * delta);
-                    }
+                    next[y][x] = neighbors === 3 || (alive && neighbors === 2);
                 }
             }
 
@@ -236,7 +171,7 @@
             }
             running = true;
             toggleBtn.textContent = 'Pause';
-            timer = setInterval(stepAutomata, 100);
+            timer = setInterval(nextGeneration, 120);
         }
 
         function stop() {
@@ -246,21 +181,16 @@
             timer = null;
         }
 
-        function paintCell(event) {
+        canvas.addEventListener('click', (event) => {
             const rect = canvas.getBoundingClientRect();
             const x = Math.floor((event.clientX - rect.left) / cellSize);
             const y = Math.floor((event.clientY - rect.top) / cellSize);
 
             if (x >= 0 && x < cols && y >= 0 && y < rows) {
-                const active = grid[y][x][0] < 0.5;
-                for (let c = 0; c < CHANNELS; c++) {
-                    grid[y][x][c] = active ? (c === 0 ? 1 : Math.random()) : 0;
-                }
+                grid[y][x] = !grid[y][x];
                 draw();
             }
-        }
-
-        canvas.addEventListener('click', paintCell);
+        });
 
         toggleBtn.addEventListener('click', () => {
             if (running) {
@@ -272,7 +202,7 @@
 
         stepBtn.addEventListener('click', () => {
             if (!running) {
-                stepAutomata();
+                nextGeneration();
             }
         });
 
@@ -281,15 +211,9 @@
             draw();
         });
 
-        ruleBtn.addEventListener('click', () => {
-            randomizeRule();
-        });
-
         clearBtn.addEventListener('click', () => {
             stop();
             grid = createGrid(false);
-            rule = createDefaultRule();
-            ruleNote.textContent = 'Rule: smooth activator-diffuser (default)';
             draw();
         });
 
