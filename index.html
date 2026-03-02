@@ -140,10 +140,10 @@
         function createGrid(randomize = false) {
             return Array.from({ length: rows }, () =>
                 Array.from({ length: cols }, () => {
-                    const cell = new Uint8Array(channelsPerCell);
+                    const cell = createCell(0);
                     if (randomize) {
                         for (let c = 0; c < channelsPerCell; c++) {
-                            cell[c] = Math.random() < 0.28 ? 1 : 0;
+                            cell[c] = Math.random();
                         }
                     }
                     return cell;
@@ -151,12 +151,25 @@
             );
         }
 
-        function getCellEnergy(cell) {
-            let sum = 0;
-            for (let c = 0; c < channelsPerCell; c++) {
-                sum += cell[c];
-            }
-            return sum / channelsPerCell;
+        function createRandomRule() {
+            const neighborhoodSize = (neighborhoodRadius * 2 + 1) ** 2;
+            const kernel = Array.from({ length: neighborhoodSize }, () =>
+                Array.from({ length: channelsPerCell }, () =>
+                    Array.from({ length: channelsPerCell }, () => (Math.random() - 0.5) * 0.35)
+                )
+            );
+
+            const bias = Array.from({ length: channelsPerCell }, () => (Math.random() - 0.5) * 0.4);
+
+            return {
+                kernel,
+                bias,
+                gain: 1.2 + Math.random() * 0.8
+            };
+        }
+
+        function updateRuleLabel() {
+            ruleLabel.textContent = `Rule: 3x3 convolution, gain=${rule.gain.toFixed(2)}`;
         }
 
         function draw() {
@@ -164,7 +177,7 @@
 
             for (let y = 0; y < rows; y++) {
                 for (let x = 0; x < cols; x++) {
-                    const value = getCellEnergy(grid[y][x]);
+                    const value = Math.max(0, Math.min(1, grid[y][x][0]));
                     const hue = 210 + value * 60;
                     const lightness = 14 + value * 72;
                     ctx.fillStyle = `hsl(${hue}, 80%, ${lightness}%)`;
@@ -173,22 +186,8 @@
             }
         }
 
-        function countNeighbors(x, y) {
-            let count = 0;
-            for (let dy = -1; dy <= 1; dy++) {
-                for (let dx = -1; dx <= 1; dx++) {
-                    if (dx === 0 && dy === 0) {
-                        continue;
-                    }
-
-                    const nx = (x + dx + cols) % cols;
-                    const ny = (y + dy + rows) % rows;
-                    if (grid[ny][nx][0] === 1) {
-                        count++;
-                    }
-                }
-            }
-            return count;
+        function applyActivation(value) {
+            return 1 / (1 + Math.exp(-value));
         }
 
         function nextGeneration() {
@@ -202,10 +201,12 @@
                         ? (rule.survives.has(neighbors) ? 1 : 0)
                         : (rule.births.has(neighbors) ? 1 : 0);
 
-                    for (let c = channelsPerCell - 1; c > 0; c--) {
-                        next[y][x][c] = grid[y][x][c - 1];
+                                kernelIndex++;
+                            }
+                        }
+
+                        next[y][x][outChannel] = applyActivation(sum * rule.gain);
                     }
-                    next[y][x][0] = nextValue;
                 }
             }
 
@@ -235,9 +236,8 @@
             const y = Math.floor((event.clientY - rect.top) / cellSize);
 
             if (x >= 0 && x < cols && y >= 0 && y < rows) {
-                const nextValue = grid[y][x][0] === 1 ? 0 : 1;
                 for (let c = 0; c < channelsPerCell; c++) {
-                    grid[y][x][c] = nextValue;
+                    grid[y][x][c] = Math.random();
                 }
                 draw();
             }
@@ -276,5 +276,6 @@
         updateRuleLabel();
         draw();
     </script>
+
 </body>
 </html>
