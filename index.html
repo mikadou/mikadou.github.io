@@ -8,24 +8,57 @@
         body {
             margin: 0;
             font-family: Arial, sans-serif;
-            background-color: #f4f4f4;
+            background-color: #eef2f7;
             display: flex;
             justify-content: center;
             align-items: center;
-            height: 100vh;
+            min-height: 100vh;
             text-align: center;
+            padding: 20px;
+            box-sizing: border-box;
         }
         .container {
             background: white;
-            padding: 40px;
-            border-radius: 8px;
+            padding: 28px;
+            border-radius: 10px;
             box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+            max-width: 680px;
+            width: 100%;
         }
         h1 {
             margin-top: 0;
         }
         p {
             color: #555;
+        }
+        .game {
+            margin-top: 20px;
+        }
+        #gameCanvas {
+            border: 1px solid #d1d9e6;
+            background: #f8fbff;
+            border-radius: 4px;
+            cursor: crosshair;
+            max-width: 100%;
+        }
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 8px;
+            margin-top: 12px;
+        }
+        button {
+            border: 1px solid #cbd5e1;
+            background: #f8fafc;
+            color: #334155;
+            padding: 8px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+        }
+        button:hover {
+            background: #f1f5f9;
         }
         footer {
             margin-top: 20px;
@@ -45,10 +78,143 @@
     <div class="container">
         <h1>🚧 Site Under Construction</h1>
         <p>This GitHub Pages site is coming soon.</p>
-        <p>Check back later!</p>
+        <p>Try the mini Game of Life below while you wait.</p>
+
+        <section class="game" aria-label="Conway's Game of Life">
+            <canvas id="gameCanvas" width="480" height="320"></canvas>
+            <div class="controls">
+                <button id="toggleBtn" type="button">Start</button>
+                <button id="stepBtn" type="button">Step</button>
+                <button id="randomBtn" type="button">Randomize</button>
+                <button id="clearBtn" type="button">Clear</button>
+            </div>
+        </section>
+
         <footer>
             Hosted with <a href="https://pages.github.com/">GitHub Pages</a>
         </footer>
     </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const toggleBtn = document.getElementById('toggleBtn');
+        const stepBtn = document.getElementById('stepBtn');
+        const randomBtn = document.getElementById('randomBtn');
+        const clearBtn = document.getElementById('clearBtn');
+
+        const cellSize = 16;
+        const cols = Math.floor(canvas.width / cellSize);
+        const rows = Math.floor(canvas.height / cellSize);
+
+        let running = false;
+        let grid = createGrid(false);
+        let timer = null;
+
+        function createGrid(randomize = false) {
+            return Array.from({ length: rows }, () =>
+                Array.from({ length: cols }, () => (randomize ? Math.random() < 0.28 : false))
+            );
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            for (let y = 0; y < rows; y++) {
+                for (let x = 0; x < cols; x++) {
+                    ctx.fillStyle = grid[y][x] ? '#2563eb' : '#e7eef9';
+                    ctx.fillRect(x * cellSize, y * cellSize, cellSize - 1, cellSize - 1);
+                }
+            }
+        }
+
+        function countNeighbors(x, y) {
+            let count = 0;
+            for (let dy = -1; dy <= 1; dy++) {
+                for (let dx = -1; dx <= 1; dx++) {
+                    if (dx === 0 && dy === 0) {
+                        continue;
+                    }
+
+                    const nx = (x + dx + cols) % cols;
+                    const ny = (y + dy + rows) % rows;
+                    if (grid[ny][nx]) {
+                        count++;
+                    }
+                }
+            }
+            return count;
+        }
+
+        function nextGeneration() {
+            const next = createGrid(false);
+
+            for (let y = 0; y < rows; y++) {
+                for (let x = 0; x < cols; x++) {
+                    const alive = grid[y][x];
+                    const neighbors = countNeighbors(x, y);
+
+                    next[y][x] = neighbors === 3 || (alive && neighbors === 2);
+                }
+            }
+
+            grid = next;
+            draw();
+        }
+
+        function start() {
+            if (running) {
+                return;
+            }
+            running = true;
+            toggleBtn.textContent = 'Pause';
+            timer = setInterval(nextGeneration, 120);
+        }
+
+        function stop() {
+            running = false;
+            toggleBtn.textContent = 'Start';
+            clearInterval(timer);
+            timer = null;
+        }
+
+        canvas.addEventListener('click', (event) => {
+            const rect = canvas.getBoundingClientRect();
+            const x = Math.floor((event.clientX - rect.left) / cellSize);
+            const y = Math.floor((event.clientY - rect.top) / cellSize);
+
+            if (x >= 0 && x < cols && y >= 0 && y < rows) {
+                grid[y][x] = !grid[y][x];
+                draw();
+            }
+        });
+
+        toggleBtn.addEventListener('click', () => {
+            if (running) {
+                stop();
+            } else {
+                start();
+            }
+        });
+
+        stepBtn.addEventListener('click', () => {
+            if (!running) {
+                nextGeneration();
+            }
+        });
+
+        randomBtn.addEventListener('click', () => {
+            grid = createGrid(true);
+            draw();
+        });
+
+        clearBtn.addEventListener('click', () => {
+            stop();
+            grid = createGrid(false);
+            draw();
+        });
+
+        draw();
+    </script>
 </body>
 </html>
