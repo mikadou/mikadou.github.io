@@ -6,8 +6,9 @@
   const META_KEY = 'mikadou-growing-nca-pool-v4-meta';
   const $ = id => document.getElementById(id);
   const els = {
-    log:$('log'), step:$('stepStat'), loss:$('lossStat'), best:$('bestStat'), worst:$('worstStat'), backend:$('backendStat'), mem:$('memStat'),
+    log:$('log'), step:$('stepStat'), rolloutStep:$('rolloutStepStat'), loss:$('lossStat'), best:$('bestStat'), worst:$('worstStat'), backend:$('backendStat'), mem:$('memStat'),
     train:$('trainBtn'), pause:$('pauseBtn'), one:$('oneBtn'), reset:$('resetBtn'), save:$('saveBtn'), load:$('loadBtn'), def:$('defaultTargetBtn'), phone:$('mobilePresetBtn'), file:$('fileInput'),
+    newRun:$('newRunBtn'), stepRun:$('stepRunBtn'), animateRun:$('animateRunBtn'), stopRun:$('stopRunBtn'),
     size:$('sizeInput'), batch:$('batchInput'), lr:$('lrInput'), fire:$('fireInput'), minIter:$('minIterInput'), maxIter:$('maxIterInput'), pool:$('poolInput'), reseed:$('reseedInput')
   };
   const targetCanvas = $('targetCanvas');
@@ -15,6 +16,7 @@
   const tctx = targetCanvas.getContext('2d', { willReadFrequently:true });
   let model, optimizer, perceptionKernel, targetTensor, pool = [];
   let running = false, step = 0, lastLoss = NaN, lastBest = NaN, lastWorst = NaN;
+  let rolloutState = null, rolloutStep = 0, animatingRun = false;
 
   function log(s){ els.log.textContent = s; }
   function logError(prefix, err){ console.error(err); log(prefix + '\n' + (err && err.message ? err.message : String(err))); }
@@ -30,9 +32,11 @@
   function reseedProb(){ return Math.max(0, Math.min(1, val(els.reseed, 10) / 100)); }
   function rnd(a,b){ return a + Math.floor(Math.random() * (b - a + 1)); }
   function nextPaint(){ return new Promise(r => requestAnimationFrame(() => setTimeout(r, 0))); }
+  function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
   function fmtLoss(v){ return Number.isFinite(v) ? v.toExponential(2) : '–'; }
   function stats(){
     els.step.textContent = String(step);
+    if (els.rolloutStep) els.rolloutStep.textContent = String(rolloutStep);
     els.loss.textContent = fmtLoss(lastLoss);
     els.best.textContent = fmtLoss(lastBest);
     els.worst.textContent = fmtLoss(lastWorst);
@@ -43,6 +47,7 @@
   function disposePool(){ for (const t of pool) t.dispose(); pool = []; }
   function initPool(){ disposePool(); for (let i=0;i<poolSize();i++) pool.push(seed(1)); }
   function ensurePool(){ if (pool.length !== poolSize() || !pool[0] || pool[0].shape[1] !== size()) initPool(); }
+  function disposeRollout(){ if (rolloutState) rolloutState.dispose(); rolloutState = null; rolloutStep = 0; stats(); }
   function sampleIdxs(n){
     const a = Array.from({length: pool.length}, (_,i)=>i);
     for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; }
@@ -71,7 +76,7 @@
     img.onload=()=>{
       const s=size(); resizeCanvases(s); tctx.clearRect(0,0,s,s);
       const scale=Math.min(s/img.width,s/img.height); const w=img.width*scale,h=img.height*scale;
-      tctx.drawImage(img,(s-w)/2,(s-h)/2,w,h); updateTarget(); initPool(); URL.revokeObjectURL(url);
+      tctx.drawImage(img,(s-w)/2,(s-h)/2,w,h); updateTarget(); initPool(); disposeRollout(); URL.revokeObjectURL(url);
       log('Loaded target image and reset pool. Press Train.');
     };
     img.src=url;
@@ -108,6 +113,10 @@
     const weight = alpha.mul(4).add(.35);
     return rgba.sub(target).square().mul(weight).mean([1,2,3]);
   }
+  async function drawStateToPreview(state){
+    const img = tf.tidy(() => state.slice([0,0,0,0],[1,-1,-1,4]).squeeze().clipByValue(0,1));
+    await tf.browser.toPixels(img, previewCanvas); img.dispose(); stats();
+  }
   async function renderPreview(iter=maxIter()){
     const img=tf.tidy(()=>{
       let x=seed(1); for(let i=0;i<iter;i++) x=caStep(x);
@@ -115,6 +124,30 @@
     });
     await tf.browser.toPixels(img, previewCanvas); img.dispose(); stats();
   }
+  async function newRun(){
+    animatingRun = false;
+    disposeRollout();
+    rolloutState = seed(1);
+    rolloutStep = 0;
+    await drawStateToPreview(rolloutState);
+    log('Started a fresh rollout from a single seed. Tap Step or Animate.');
+  }
+  async function stepRun(){
+    if (!rolloutState) { rolloutState = seed(1); rolloutStep = 0; }
+    const next = tf.tidy(() => caStep(rolloutState));
+    rolloutState.dispose(); rolloutState = next; rolloutStep++;
+    await drawStateToPreview(rolloutState);
+    log('Advanced rollout to step ' + rolloutStep + '.');
+  }
+  async function animateRun(){
+    if (animatingRun) return;
+    if (!rolloutState) { rolloutState = seed(1); rolloutStep = 0; }
+    animatingRun = true;
+    log('Animating rollout from the current state.');
+    try { while (animatingRun) { await stepRun(); await sleep(120); } }
+    catch (err) { animatingRun = false; logError('Rollout animation failed:', err); }
+  }
+  function stopRun(){ animatingRun = false; log('Stopped rollout animation at step ' + rolloutStep + '.'); }
   async function trainOneStep(){
     ensurePool();
     const b=batch(), n=rnd(minIter(),maxIter());
@@ -153,34 +186,37 @@
     }
     finalX.dispose();
     step++; localStorage.setItem(META_KEY + ':step', String(step)); stats();
-    if(step % (IS_PHONE ? 3 : 5) === 0) await renderPreview(maxIter());
+    if(step % (IS_PHONE ? 3 : 5) === 0 && !animatingRun) await renderPreview(maxIter());
     if(step % 50 === 0) await save(false);
     log('Training… completed step ' + step + '. Worst sample was reseeded.');
   }
   async function loop(){
     if(running) return; running=true; els.train.disabled=true; els.pause.disabled=false;
+    animatingRun = false;
     log('Training started. Worst-sample reseeding is enabled.'); await nextPaint();
     try{ while(running){ await trainOneStep(); await nextPaint(); } }
     catch(err){ running=false; els.train.disabled=false; els.pause.disabled=true; logError('Training stopped:', err); }
   }
   function pause(){ running=false; els.train.disabled=false; els.pause.disabled=true; log('Paused.'); }
   async function resetModel(){
-    pause(); if(model) model.dispose(); model=createModel(); optimizer=tf.train.adam(val(els.lr,.002));
+    pause(); animatingRun = false; disposeRollout();
+    if(model) model.dispose(); model=createModel(); optimizer=tf.train.adam(val(els.lr,.002));
     step=0; lastLoss=NaN; lastBest=NaN; lastWorst=NaN; initPool(); stats(); await renderPreview(1);
-    log('Model and pool reset. Press Train or 1 step.');
+    log('Model and pool reset. Press Train or 1 train step.');
   }
   async function save(verbose=true){
     await model.save(MODEL_URL);
     localStorage.setItem(META_KEY, JSON.stringify({step,size:size(),channels:CHANNELS,pool:poolSize(),savedAt:new Date().toISOString()}));
-    if(verbose) log('Saved model checkpoint in this browser. Pool RAM is not persisted.');
+    if(verbose) log('Saved model checkpoint in this browser. Pool RAM and current rollout are not persisted.');
   }
   async function load(){
     try{
+      animatingRun = false; disposeRollout();
       if(model) model.dispose(); model=await tf.loadLayersModel(MODEL_URL); optimizer=tf.train.adam(val(els.lr,.002));
       const meta=JSON.parse(localStorage.getItem(META_KEY)||'{}');
       if(meta.size) els.size.value=meta.size; if(meta.pool) els.pool.value=meta.pool;
       drawDefaultTarget(); initPool(); step=Number(meta.step||localStorage.getItem(META_KEY+':step')||0); stats(); await renderPreview(maxIter());
-      log('Loaded model checkpoint. Pool was reset from seeds.');
+      log('Loaded model checkpoint. Use New run to step through a single growth rollout.');
     } catch(e){ log('No v4 checkpoint found in this browser.'); }
   }
   async function init(){
@@ -189,7 +225,7 @@
       await tf.ready(); try{ await tf.setBackend('webgl'); await tf.ready(); }catch(e){}
       perceptionKernel=makePerceptionKernel(); model=createModel(); optimizer=tf.train.adam(val(els.lr,.002));
       drawDefaultTarget(); initPool(); stats(); await renderPreview(1);
-      log('Ready: worst-sample reseeding enabled. Reset and retrain for the new defaults.');
+      log('Ready. Load your saved model, then tap New run and Step/Animate.');
     } catch(err){ logError('Initialization failed:', err); }
   }
   els.train.onclick=loop;
@@ -203,5 +239,9 @@
   els.file.onchange=e=>{ if(e.target.files[0]) uploaded(e.target.files[0]); };
   els.size.onchange=()=>{ drawDefaultTarget(); resetModel(); };
   els.pool.onchange=()=>initPool();
+  els.newRun.onclick=()=>{ newRun(); };
+  els.stepRun.onclick=()=>{ stepRun(); };
+  els.animateRun.onclick=()=>{ animateRun(); };
+  els.stopRun.onclick=()=>{ stopRun(); };
   init();
 })();
