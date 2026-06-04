@@ -53,19 +53,56 @@
     for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; }
     return a.slice(0,n);
   }
+  function addTargetPresetButtons(){
+    const parent = els.def && els.def.parentElement;
+    if (!parent || $('carTargetBtn')) return;
+    for (const [id, label, kind] of [['carTargetBtn','Car','car'], ['houseTargetBtn','House','house'], ['catTargetBtn','Cat','cat']]) {
+      const b = document.createElement('button');
+      b.id = id; b.type = 'button'; b.textContent = label;
+      b.onclick = () => { drawPresetTarget(kind); resetModel(); };
+      parent.appendChild(b);
+    }
+    if (els.def) els.def.textContent = 'Flower';
+  }
   function phonePreset(){
     els.size.value=24; els.batch.value=2; els.lr.value=.002; els.minIter.value=16; els.maxIter.value=40; els.pool.value=64; els.reseed.value=10;
     drawDefaultTarget(); resetModel();
   }
+  function clearTarget(){ const s=size(); resizeCanvases(s); tctx.clearRect(0,0,s,s); return s; }
   function drawDefaultTarget(){
-    const s=size(); resizeCanvases(s); tctx.clearRect(0,0,s,s);
-    const cx=s/2, cy=s/2; tctx.save(); tctx.translate(cx,cy);
+    const s=clearTarget(); const cx=s/2, cy=s/2; tctx.save(); tctx.translate(cx,cy);
     for(let i=0;i<6;i++){
       tctx.rotate(Math.PI/3); tctx.fillStyle='rgba(255,170,80,.92)';
       tctx.beginPath(); tctx.ellipse(s*.17,0,s*.18,s*.075,0,0,Math.PI*2); tctx.fill();
     }
     tctx.restore(); tctx.fillStyle='rgba(70,255,215,1)';
     tctx.beginPath(); tctx.arc(cx,cy,s*.12,0,Math.PI*2); tctx.fill(); updateTarget();
+  }
+  function drawPresetTarget(kind){
+    const s = clearTarget();
+    const u = s / 24;
+    tctx.save();
+    tctx.lineCap = 'round'; tctx.lineJoin = 'round';
+    if (kind === 'car') {
+      tctx.fillStyle='rgba(70,180,255,1)'; tctx.fillRect(5*u,11*u,14*u,5*u);
+      tctx.fillStyle='rgba(120,220,255,.95)'; tctx.fillRect(8*u,8*u,7*u,4*u);
+      tctx.fillStyle='rgba(8,12,20,1)'; tctx.beginPath(); tctx.arc(8*u,17*u,2*u,0,Math.PI*2); tctx.arc(17*u,17*u,2*u,0,Math.PI*2); tctx.fill();
+      tctx.fillStyle='rgba(255,245,120,1)'; tctx.fillRect(18*u,12*u,1.5*u,1.5*u);
+    } else if (kind === 'house') {
+      tctx.fillStyle='rgba(255,190,110,1)'; tctx.fillRect(6*u,11*u,12*u,9*u);
+      tctx.fillStyle='rgba(255,95,95,1)'; tctx.beginPath(); tctx.moveTo(4*u,12*u); tctx.lineTo(12*u,5*u); tctx.lineTo(20*u,12*u); tctx.closePath(); tctx.fill();
+      tctx.fillStyle='rgba(80,55,35,1)'; tctx.fillRect(11*u,15*u,3*u,5*u);
+      tctx.fillStyle='rgba(115,210,255,1)'; tctx.fillRect(7.5*u,13*u,2.5*u,2.5*u); tctx.fillRect(15*u,13*u,2.5*u,2.5*u);
+    } else if (kind === 'cat') {
+      tctx.fillStyle='rgba(245,170,75,1)';
+      tctx.beginPath(); tctx.arc(12*u,13*u,6*u,0,Math.PI*2); tctx.fill();
+      tctx.beginPath(); tctx.moveTo(7.5*u,9.5*u); tctx.lineTo(8.5*u,4.8*u); tctx.lineTo(11*u,8.5*u); tctx.closePath(); tctx.fill();
+      tctx.beginPath(); tctx.moveTo(16.5*u,9.5*u); tctx.lineTo(15.5*u,4.8*u); tctx.lineTo(13*u,8.5*u); tctx.closePath(); tctx.fill();
+      tctx.fillStyle='rgba(20,25,35,1)'; tctx.beginPath(); tctx.arc(10*u,12.5*u,.8*u,0,Math.PI*2); tctx.arc(14*u,12.5*u,.8*u,0,Math.PI*2); tctx.fill();
+      tctx.fillStyle='rgba(255,125,160,1)'; tctx.beginPath(); tctx.arc(12*u,15*u,1*u,0,Math.PI*2); tctx.fill();
+    }
+    tctx.restore(); updateTarget();
+    log('Selected target: ' + kind + '. Model reset; train this target separately.');
   }
   function updateTarget(){
     if(targetTensor) targetTensor.dispose();
@@ -74,7 +111,7 @@
   function uploaded(file){
     const url=URL.createObjectURL(file), img=new Image();
     img.onload=()=>{
-      const s=size(); resizeCanvases(s); tctx.clearRect(0,0,s,s);
+      const s=clearTarget();
       const scale=Math.min(s/img.width,s/img.height); const w=img.width*scale,h=img.height*scale;
       tctx.drawImage(img,(s-w)/2,(s-h)/2,w,h); updateTarget(); initPool(); disposeRollout(); URL.revokeObjectURL(url);
       log('Loaded target image and reset training pool.');
@@ -101,10 +138,17 @@
     return buf.toTensor();
   }
   function perceive(x){ return tf.depthwiseConv2d(x, perceptionKernel, 1, 'same'); }
+  function aliveMask(x){
+    return tf.maxPool(x.slice([0,0,0,3],[-1,-1,-1,1]), 3, 1, 'same').greater(0.1).toFloat();
+  }
+  function stopGrad(x){ return tf.stopGradient ? tf.stopGradient(x) : x.clone(); }
   function caStep(x){
+    const preAlive = stopGrad(aliveMask(x));
     const dx=model.apply(perceive(x));
     const mask=tf.randomUniform([x.shape[0],x.shape[1],x.shape[2],1]).less(fire()).toFloat();
-    return x.add(dx.mul(mask)).clipByValue(-2, 2);
+    const y = x.add(dx.mul(mask)).clipByValue(-2, 2);
+    const postAlive = stopGrad(aliveMask(y));
+    return y.mul(preAlive.mul(postAlive));
   }
   function perSampleLosses(x){
     const rgba = x.slice([0,0,0,0],[-1,-1,-1,4]).clipByValue(0,1);
@@ -127,7 +171,7 @@
     rolloutState = seed(1);
     rolloutStep = 0;
     await drawStateToCanvas(rolloutState, runCanvas);
-    log('Run viewer: fresh center seed created. Use Step or Animate.');
+    log('Run viewer: clean center seed created. Use Step or Animate.');
   }
   async function stepRun(count=1){
     if (!rolloutState) { rolloutState = seed(1); rolloutStep = 0; }
@@ -188,12 +232,12 @@
     step++; localStorage.setItem(META_KEY + ':step', String(step)); stats();
     if(step % (IS_PHONE ? 3 : 5) === 0) await renderPreview(maxIter());
     if(step % 50 === 0) await save(false);
-    log('Training completed step ' + step + '. Worst sample was reseeded.');
+    log('Training completed step ' + step + '. Alive mask enabled; worst sample reseeded.');
   }
   async function loop(){
     if(running) return; running=true; els.train.disabled=true; els.pause.disabled=false;
     animatingRun = false;
-    log('Training started. Run viewer is independent and will not be overwritten.'); await nextPaint();
+    log('Training started with alive mask enabled.'); await nextPaint();
     try{ while(running){ await trainOneStep(); await nextPaint(); } }
     catch(err){ running=false; els.train.disabled=false; els.pause.disabled=true; logError('Training stopped:', err); }
   }
@@ -203,7 +247,7 @@
     if(model) model.dispose(); model=createModel(); optimizer=tf.train.adam(val(els.lr,.002));
     step=0; lastLoss=NaN; lastBest=NaN; lastWorst=NaN; initPool(); stats(); await renderPreview(1);
     const ctx=runCanvas.getContext('2d'); ctx.clearRect(0,0,runCanvas.width,runCanvas.height);
-    log('Model and pool reset.');
+    log('Model and pool reset. Alive mask enabled.');
   }
   async function save(verbose=true){
     await model.save(MODEL_URL);
@@ -217,18 +261,19 @@
       const meta=JSON.parse(localStorage.getItem(META_KEY)||'{}');
       if(meta.size) els.size.value=meta.size; if(meta.pool) els.pool.value=meta.pool;
       drawDefaultTarget(); initPool(); step=Number(meta.step||localStorage.getItem(META_KEY+':step')||0); stats(); await renderPreview(maxIter());
-      if(verbose) log('Loaded saved model. In Run trained model, tap New seed.');
+      if(verbose) log('Loaded saved model. Use New seed to run a clean alive-masked rollout.');
       return true;
     } catch(e){ log('No saved model found in this browser. Train and Save first.'); return false; }
   }
-  async function loadRun(){ const ok = await load(false); if(ok){ await newRun(); log('Loaded saved model and started a fresh run.'); } }
+  async function loadRun(){ const ok = await load(false); if(ok){ await newRun(); log('Loaded saved model and started a clean fresh run.'); } }
   async function init(){
     try{
       if(IS_PHONE){ els.size.value=24; els.batch.value=2; els.lr.value=.002; els.minIter.value=16; els.maxIter.value=40; els.pool.value=64; els.reseed.value=10; }
+      addTargetPresetButtons();
       await tf.ready(); try{ await tf.setBackend('webgl'); await tf.ready(); }catch(e){}
       perceptionKernel=makePerceptionKernel(); model=createModel(); optimizer=tf.train.adam(val(els.lr,.002));
       drawDefaultTarget(); initPool(); stats(); await renderPreview(1); clearRun();
-      log('Ready. Train/Save, then use the separate Run trained model section.');
+      log('Ready. Alive mask enabled. Presets added: Flower, Car, House, Cat.');
     } catch(err){ logError('Initialization failed:', err); }
   }
   els.train.onclick=loop;
