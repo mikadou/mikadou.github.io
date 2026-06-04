@@ -32,7 +32,7 @@
     .pill { background:#0d1426; border:1px solid var(--line); border-radius:12px; padding:10px; }
     .pill strong { display:block; font-size:1.05rem; }
     .pill span { color:var(--muted); font-size:.78rem; }
-    .log { min-height: 52px; color:var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:.86rem; white-space:pre-wrap; }
+    .log { min-height: 72px; color:var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:.86rem; white-space:pre-wrap; }
     .small { font-size:.9rem; }
     @media (max-width: 860px) { .hero, .grid { grid-template-columns:1fr; } .controls { grid-template-columns: repeat(2, 1fr); } .stat { grid-template-columns: repeat(2, 1fr); } }
   </style>
@@ -42,10 +42,7 @@
   <section class="hero">
     <div>
       <h1>Growing Neural Cellular Automata</h1>
-      <p>
-        A browser-only TensorFlow.js experiment inspired by <em>Growing Neural Cellular Automata</em>.
-        Train a local update rule directly in this tab, pause/resume it, and save checkpoints to this browser.
-      </p>
+      <p>A browser-only TensorFlow.js experiment inspired by <em>Growing Neural Cellular Automata</em>. Train a local update rule directly in this tab, pause/resume it, and save checkpoints to this browser.</p>
       <p class="small">Weights are stored in <strong>IndexedDB</strong>; lightweight training metadata is stored in <strong>localStorage</strong>. Nothing is uploaded to a server.</p>
     </div>
     <div class="card">
@@ -70,7 +67,6 @@
         <button id="clearCheckpointBtn">Clear saved</button>
       </div>
     </div>
-
     <div class="card">
       <h2>Current growth preview</h2>
       <canvas id="previewCanvas" width="48" height="48"></canvas>
@@ -92,10 +88,10 @@
       <label class="field"><span>Batch size</span><input id="batchInput" type="number" min="1" max="8" step="1" value="2"></label>
       <label class="field"><span>Learning rate</span><input id="lrInput" type="number" min="0.0001" max="0.01" step="0.0001" value="0.002"></label>
       <label class="field"><span>Fire rate</span><input id="fireInput" type="number" min="0.1" max="1" step="0.05" value="0.5"></label>
-      <label class="field"><span>Min CA steps per batch</span><input id="minIterInput" type="number" min="8" max="128" step="4" value="48"></label>
-      <label class="field"><span>Max CA steps per batch</span><input id="maxIterInput" type="number" min="8" max="160" step="4" value="64"></label>
+      <label class="field"><span>Min CA steps per batch</span><input id="minIterInput" type="number" min="8" max="128" step="4" value="32"></label>
+      <label class="field"><span>Max CA steps per batch</span><input id="maxIterInput" type="number" min="8" max="160" step="4" value="48"></label>
     </div>
-    <p class="small">Tip: 48×48 with batch 2 is a good browser default. 64×64 works on stronger desktops but can feel slow.</p>
+    <p class="small">Tip: start with 48×48, batch 2, and 32–48 CA steps. Increase settings after confirming that steps advance.</p>
   </section>
 </main>
 
@@ -108,42 +104,28 @@
   const targetCanvas = document.getElementById("targetCanvas");
   const previewCanvas = document.getElementById("previewCanvas");
   const tctx = targetCanvas.getContext("2d", { willReadFrequently: true });
-  const pctx = previewCanvas.getContext("2d");
 
   const els = {
-    log: document.getElementById("log"),
-    step: document.getElementById("stepStat"),
-    loss: document.getElementById("lossStat"),
-    backend: document.getElementById("backendStat"),
-    mem: document.getElementById("memStat"),
-    train: document.getElementById("trainBtn"),
-    pause: document.getElementById("pauseBtn"),
-    reset: document.getElementById("resetBtn"),
-    save: document.getElementById("saveBtn"),
-    load: document.getElementById("loadBtn"),
-    grow: document.getElementById("growBtn"),
-    def: document.getElementById("defaultTargetBtn"),
-    clear: document.getElementById("clearCheckpointBtn"),
-    file: document.getElementById("fileInput"),
-    size: document.getElementById("sizeInput"),
-    batch: document.getElementById("batchInput"),
-    lr: document.getElementById("lrInput"),
-    fire: document.getElementById("fireInput"),
-    minIter: document.getElementById("minIterInput"),
-    maxIter: document.getElementById("maxIterInput")
+    log: document.getElementById("log"), step: document.getElementById("stepStat"), loss: document.getElementById("lossStat"), backend: document.getElementById("backendStat"), mem: document.getElementById("memStat"),
+    train: document.getElementById("trainBtn"), pause: document.getElementById("pauseBtn"), reset: document.getElementById("resetBtn"), save: document.getElementById("saveBtn"), load: document.getElementById("loadBtn"), grow: document.getElementById("growBtn"), def: document.getElementById("defaultTargetBtn"), clear: document.getElementById("clearCheckpointBtn"), file: document.getElementById("fileInput"),
+    size: document.getElementById("sizeInput"), batch: document.getElementById("batchInput"), lr: document.getElementById("lrInput"), fire: document.getElementById("fireInput"), minIter: document.getElementById("minIterInput"), maxIter: document.getElementById("maxIterInput")
   };
 
   let model, optimizer, targetTensor, perceptionKernel;
   let running = false;
-  let step = Number(localStorage.getItem(META_KEY + ":step") || 0);
+  let step = 0;
   let lastLoss = NaN;
 
   function log(msg) { els.log.textContent = msg; }
+  function logError(prefix, err) { console.error(err); log(prefix + "\n" + (err && err.message ? err.message : String(err))); }
+  window.addEventListener("error", e => logError("JavaScript error:", e.error || e.message));
+  window.addEventListener("unhandledrejection", e => logError("Async error:", e.reason));
+
   function gridSize() { return Math.max(24, Math.min(96, Number(els.size.value) || 48)); }
   function batchSize() { return Math.max(1, Math.min(8, Number(els.batch.value) || 2)); }
   function fireRate() { return Math.max(0.05, Math.min(1, Number(els.fire.value) || 0.5)); }
-  function minIter() { return Math.max(1, Number(els.minIter.value) || 48); }
-  function maxIter() { return Math.max(minIter(), Number(els.maxIter.value) || 64); }
+  function minIter() { return Math.max(1, Number(els.minIter.value) || 32); }
+  function maxIter() { return Math.max(minIter(), Number(els.maxIter.value) || 48); }
   function randomInt(lo, hi) { return lo + Math.floor(Math.random() * (hi - lo + 1)); }
 
   function updateStats() {
@@ -162,7 +144,7 @@
       const k = y * 3 + x;
       for (let c = 0; c < CHANNELS; c++) {
         const base = (((y * 3 + x) * CHANNELS + c) * 3);
-        data[base + 0] = ident[k];
+        data[base] = ident[k];
         data[base + 1] = sobelX[k];
         data[base + 2] = sobelY[k];
       }
@@ -172,55 +154,18 @@
 
   function createModel() {
     const m = tf.sequential();
-    m.add(tf.layers.conv2d({
-      inputShape: [null, null, CHANNELS * 3],
-      filters: 128,
-      kernelSize: 1,
-      activation: "relu",
-      padding: "same",
-      kernelInitializer: "glorotNormal"
-    }));
-    m.add(tf.layers.conv2d({
-      filters: CHANNELS,
-      kernelSize: 1,
-      activation: "linear",
-      padding: "same",
-      useBias: false,
-      kernelInitializer: "zeros"
-    }));
+    m.add(tf.layers.conv2d({ inputShape: [null, null, CHANNELS * 3], filters: 64, kernelSize: 1, activation: "relu", padding: "same", kernelInitializer: "glorotNormal" }));
+    m.add(tf.layers.conv2d({ filters: CHANNELS, kernelSize: 1, activation: "linear", padding: "same", useBias: false, kernelInitializer: "zeros" }));
     return m;
   }
 
-  function resizeCanvases(size) {
-    for (const c of [targetCanvas, previewCanvas]) {
-      c.width = size;
-      c.height = size;
-    }
-  }
+  function resizeCanvases(size) { for (const c of [targetCanvas, previewCanvas]) { c.width = size; c.height = size; } }
 
   function drawDefaultTarget() {
-    const s = gridSize();
-    resizeCanvases(s);
-    tctx.clearRect(0, 0, s, s);
-    const cx = s / 2, cy = s / 2;
-    tctx.save();
-    tctx.translate(cx, cy);
-    for (let i = 0; i < 8; i++) {
-      tctx.rotate(Math.PI / 4);
-      const g = tctx.createRadialGradient(s * 0.19, 0, 1, s * 0.22, 0, s * 0.18);
-      g.addColorStop(0, "rgba(255,246,122,0.98)");
-      g.addColorStop(1, "rgba(255,126,80,0.78)");
-      tctx.fillStyle = g;
-      tctx.beginPath();
-      tctx.ellipse(s * 0.18, 0, s * 0.19, s * 0.08, 0, 0, Math.PI * 2);
-      tctx.fill();
-    }
-    tctx.restore();
-    tctx.fillStyle = "rgba(80,255,209,1)";
-    tctx.beginPath();
-    tctx.arc(cx, cy, s * 0.12, 0, Math.PI * 2);
-    tctx.fill();
-    updateTargetTensor();
+    const s = gridSize(); resizeCanvases(s); tctx.clearRect(0, 0, s, s);
+    const cx = s / 2, cy = s / 2; tctx.save(); tctx.translate(cx, cy);
+    for (let i = 0; i < 8; i++) { tctx.rotate(Math.PI / 4); const g = tctx.createRadialGradient(s * 0.19, 0, 1, s * 0.22, 0, s * 0.18); g.addColorStop(0, "rgba(255,246,122,0.98)"); g.addColorStop(1, "rgba(255,126,80,0.78)"); tctx.fillStyle = g; tctx.beginPath(); tctx.ellipse(s * 0.18, 0, s * 0.19, s * 0.08, 0, 0, Math.PI * 2); tctx.fill(); }
+    tctx.restore(); tctx.fillStyle = "rgba(80,255,209,1)"; tctx.beginPath(); tctx.arc(cx, cy, s * 0.12, 0, Math.PI * 2); tctx.fill(); updateTargetTensor();
   }
 
   function updateTargetTensor() {
@@ -229,47 +174,27 @@
   }
 
   async function drawUploadedTarget(file) {
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-      const s = gridSize();
-      resizeCanvases(s);
-      tctx.clearRect(0, 0, s, s);
-      const scale = Math.min(s / img.width, s / img.height);
-      const w = img.width * scale, h = img.height * scale;
-      tctx.drawImage(img, (s - w) / 2, (s - h) / 2, w, h);
-      updateTargetTensor();
-      URL.revokeObjectURL(url);
-      log("Loaded target image. Press Train to start.");
-    };
+    const url = URL.createObjectURL(file); const img = new Image();
+    img.onload = () => { const s = gridSize(); resizeCanvases(s); tctx.clearRect(0, 0, s, s); const scale = Math.min(s / img.width, s / img.height); const w = img.width * scale, h = img.height * scale; tctx.drawImage(img, (s - w) / 2, (s - h) / 2, w, h); updateTargetTensor(); URL.revokeObjectURL(url); log("Loaded target image. Press Train to start."); };
     img.src = url;
   }
 
   function makeSeed(batch) {
-    const s = gridSize();
-    const buf = tf.buffer([batch, s, s, CHANNELS]);
-    const mid = Math.floor(s / 2);
-    for (let b = 0; b < batch; b++) {
-      buf.set(1, b, mid, mid, 3); // alpha channel alive seed
-    }
+    const s = gridSize(); const buf = tf.buffer([batch, s, s, CHANNELS]); const mid = Math.floor(s / 2);
+    for (let b = 0; b < batch; b++) buf.set(1, b, mid, mid, 3);
     return buf.toTensor();
   }
 
-  function perceive(x) {
-    return tf.depthwiseConv2d(x, perceptionKernel, 1, "same");
-  }
-
-  function aliveMask(x) {
-    const alpha = x.slice([0,0,0,3], [-1,-1,-1,1]);
-    return tf.maxPool(alpha, 3, 1, "same").greater(0.1).toFloat();
-  }
+  function perceive(x) { return tf.depthwiseConv2d(x, perceptionKernel, 1, "same"); }
+  function aliveMask(x) { return tf.maxPool(x.slice([0,0,0,3], [-1,-1,-1,1]), 3, 1, "same").greater(0.1).toFloat(); }
+  function detach(t) { return tf.stopGradient ? tf.stopGradient(t) : t.clone(); }
 
   function caStep(x) {
-    const pre = aliveMask(x);
+    const pre = detach(aliveMask(x));
     const dx = model.apply(perceive(x));
     const mask = tf.randomUniform([x.shape[0], x.shape[1], x.shape[2], 1]).less(fireRate()).toFloat();
     const y = x.add(dx.mul(mask));
-    const post = aliveMask(y);
+    const post = detach(aliveMask(y));
     return y.mul(pre.mul(post));
   }
 
@@ -279,118 +204,49 @@
     return rgba.sub(target).square().mean();
   }
 
-  async function renderPreview(iterations = 96) {
-    const img = tf.tidy(() => {
-      let x = makeSeed(1);
-      for (let i = 0; i < iterations; i++) x = caStep(x);
-      return x.slice([0,0,0,0], [1,-1,-1,4]).squeeze().clipByValue(0, 1);
-    });
-    await tf.browser.toPixels(img, previewCanvas);
-    img.dispose();
+  async function renderPreview(iterations = 48) {
+    const img = tf.tidy(() => { let x = makeSeed(1); for (let i = 0; i < iterations; i++) x = caStep(x); return x.slice([0,0,0,0], [1,-1,-1,4]).squeeze().clipByValue(0, 1); });
+    await tf.browser.toPixels(img, previewCanvas); img.dispose(); updateStats();
   }
 
   async function trainOneStep() {
     const n = randomInt(minIter(), maxIter());
-    const lossTensor = optimizer.minimize(() => tf.tidy(() => {
-      let x = makeSeed(batchSize());
-      for (let i = 0; i < n; i++) x = caStep(x);
-      return lossFor(x);
-    }), true);
-    lastLoss = (await lossTensor.data())[0];
-    lossTensor.dispose();
-    step += 1;
-    localStorage.setItem(META_KEY + ":step", String(step));
-    updateStats();
-    if (step % 10 === 0) await renderPreview(maxIter());
+    const lossTensor = optimizer.minimize(() => tf.tidy(() => { let x = makeSeed(batchSize()); for (let i = 0; i < n; i++) x = caStep(x); return lossFor(x); }), true);
+    if (!lossTensor) throw new Error("optimizer.minimize returned null; no trainable variables were found.");
+    lastLoss = (await lossTensor.data())[0]; lossTensor.dispose();
+    step += 1; localStorage.setItem(META_KEY + ":step", String(step)); updateStats();
+    if (step % 5 === 0) await renderPreview(maxIter());
     if (step % 100 === 0) await saveCheckpoint(false);
   }
 
   async function trainLoop() {
-    if (running) return;
-    running = true;
-    els.train.disabled = true;
-    els.pause.disabled = false;
-    log("Training… keep this tab open. Checkpoints are saved every 100 steps.");
-    while (running) {
-      await trainOneStep();
-      await tf.nextFrame();
-    }
+    if (running) return; running = true; els.train.disabled = true; els.pause.disabled = false; log("Training… if an error happens it will appear here.");
+    try { while (running) { await trainOneStep(); await tf.nextFrame(); } }
+    catch (err) { running = false; els.train.disabled = false; els.pause.disabled = true; logError("Training stopped with error:", err); }
   }
 
-  function pause() {
-    running = false;
-    els.train.disabled = false;
-    els.pause.disabled = true;
-    log("Paused. You can save or resume training.");
-  }
+  function pause() { running = false; els.train.disabled = false; els.pause.disabled = true; log("Paused. You can save or resume training."); }
 
   async function saveCheckpoint(verbose = true) {
-    await model.save(MODEL_URL);
-    const meta = { step, size: gridSize(), savedAt: new Date().toISOString() };
-    localStorage.setItem(META_KEY, JSON.stringify(meta));
-    if (verbose) log("Saved checkpoint to this browser's IndexedDB.");
+    await model.save(MODEL_URL); localStorage.setItem(META_KEY, JSON.stringify({ step, size: gridSize(), savedAt: new Date().toISOString() })); if (verbose) log("Saved checkpoint to this browser's IndexedDB.");
   }
 
   async function loadCheckpoint() {
-    try {
-      if (model) model.dispose();
-      model = await tf.loadLayersModel(MODEL_URL);
-      optimizer = tf.train.adam(Number(els.lr.value) || 0.002);
-      const meta = JSON.parse(localStorage.getItem(META_KEY) || "{}");
-      if (meta.size) {
-        els.size.value = meta.size;
-        drawDefaultTarget();
-      }
-      step = Number(meta.step || localStorage.getItem(META_KEY + ":step") || 0);
-      updateStats();
-      await renderPreview(maxIter());
-      log("Loaded checkpoint. Adam momentum is reset, but model weights are restored.");
-    } catch (err) {
-      log("No checkpoint found in this browser yet.");
-    }
+    try { if (model) model.dispose(); model = await tf.loadLayersModel(MODEL_URL); optimizer = tf.train.adam(Number(els.lr.value) || 0.002); const meta = JSON.parse(localStorage.getItem(META_KEY) || "{}"); if (meta.size) { els.size.value = meta.size; drawDefaultTarget(); } step = Number(meta.step || localStorage.getItem(META_KEY + ":step") || 0); updateStats(); await renderPreview(maxIter()); log("Loaded checkpoint. Adam momentum is reset, but model weights are restored."); }
+    catch (err) { log("No checkpoint found in this browser yet."); }
   }
 
-  async function resetModel() {
-    pause();
-    if (model) model.dispose();
-    model = createModel();
-    optimizer = tf.train.adam(Number(els.lr.value) || 0.002);
-    step = 0; lastLoss = NaN;
-    localStorage.setItem(META_KEY + ":step", "0");
-    updateStats();
-    await renderPreview(maxIter());
-    log("Model reset. Press Train to learn the current target.");
-  }
+  async function resetModel() { pause(); if (model) model.dispose(); model = createModel(); optimizer = tf.train.adam(Number(els.lr.value) || 0.002); step = 0; lastLoss = NaN; localStorage.setItem(META_KEY + ":step", "0"); updateStats(); await renderPreview(Math.min(16, maxIter())); log("Model reset. Press Train to learn the current target."); }
 
-  async function clearCheckpoint() {
-    pause();
-    try { await tf.io.removeModel(MODEL_URL); } catch (_) {}
-    localStorage.removeItem(META_KEY);
-    localStorage.removeItem(META_KEY + ":step");
-    log("Removed saved checkpoint from this browser.");
-  }
+  async function clearCheckpoint() { pause(); try { await tf.io.removeModel(MODEL_URL); } catch (_) {} localStorage.removeItem(META_KEY); localStorage.removeItem(META_KEY + ":step"); log("Removed saved checkpoint from this browser."); }
 
   async function init() {
-    await tf.ready();
-    perceptionKernel = makePerceptionKernel();
-    model = createModel();
-    optimizer = tf.train.adam(Number(els.lr.value) || 0.002);
-    drawDefaultTarget();
-    updateStats();
-    await renderPreview(32);
-    log("Ready. Upload a PNG or use the default target, then press Train.");
+    try { await tf.ready(); try { await tf.setBackend("webgl"); await tf.ready(); } catch (_) {} perceptionKernel = makePerceptionKernel(); model = createModel(); optimizer = tf.train.adam(Number(els.lr.value) || 0.002); drawDefaultTarget(); updateStats(); await renderPreview(8); log("Ready. Upload a PNG or use the default target, then press Train."); }
+    catch (err) { logError("Initialization failed:", err); }
   }
 
-  els.train.onclick = trainLoop;
-  els.pause.onclick = pause;
-  els.reset.onclick = resetModel;
-  els.save.onclick = () => saveCheckpoint(true);
-  els.load.onclick = loadCheckpoint;
-  els.grow.onclick = async () => { log("Rendering growth preview…"); await renderPreview(maxIter()); log("Rendered preview from a single seed."); };
-  els.def.onclick = () => { drawDefaultTarget(); resetModel(); };
-  els.clear.onclick = clearCheckpoint;
-  els.file.onchange = e => { if (e.target.files[0]) drawUploadedTarget(e.target.files[0]); };
-  els.size.onchange = () => { drawDefaultTarget(); resetModel(); };
+  els.train.onclick = trainLoop; els.pause.onclick = pause; els.reset.onclick = resetModel; els.save.onclick = () => saveCheckpoint(true); els.load.onclick = loadCheckpoint; els.grow.onclick = async () => { try { log("Rendering growth preview…"); await renderPreview(maxIter()); log("Rendered preview from a single seed."); } catch (err) { logError("Preview failed:", err); } };
+  els.def.onclick = () => { drawDefaultTarget(); resetModel(); }; els.clear.onclick = clearCheckpoint; els.file.onchange = e => { if (e.target.files[0]) drawUploadedTarget(e.target.files[0]); }; els.size.onchange = () => { drawDefaultTarget(); resetModel(); };
 
   init();
 })();
