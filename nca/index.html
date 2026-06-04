@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Growing Neural Cellular Automata</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+  <style>
+    :root { color-scheme: light dark; --bg:#0b1020; --card:#131a2e; --ink:#ecf2ff; --muted:#9fb0ca; --accent:#79ffe1; --line:#2a3658; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background: radial-gradient(circle at top, #1e2a4a 0, var(--bg) 55%); color:var(--ink); }
+    main { max-width: 1180px; margin: 0 auto; padding: 28px 18px 40px; }
+    h1 { margin: 0 0 8px; font-size: clamp(2rem, 5vw, 4rem); letter-spacing: -0.05em; }
+    h2 { margin: 0 0 10px; font-size: 1.05rem; }
+    p { color: var(--muted); line-height: 1.5; }
+    a { color: var(--accent); }
+    .hero { display:grid; grid-template-columns: 1.1fr .9fr; gap: 24px; align-items:center; }
+    .card { background: color-mix(in srgb, var(--card), transparent 4%); border:1px solid var(--line); border-radius: 20px; padding: 18px; box-shadow: 0 22px 80px rgba(0,0,0,.25); }
+    .grid { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:16px; margin-top:16px; }
+    canvas { width:100%; height:auto; border-radius:16px; border:1px solid var(--line); background:#05070d; image-rendering: pixelated; }
+    .controls { display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+    button, label.file { border: 1px solid var(--line); background:#18233d; color:var(--ink); padding:10px 12px; border-radius:12px; cursor:pointer; font-weight:650; text-align:center; }
+    button:hover, label.file:hover { background:#223056; }
+    button:disabled { opacity:.45; cursor:not-allowed; }
+    input[type=file] { display:none; }
+    .settings { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:10px; }
+    .field { display:flex; flex-direction:column; gap:5px; }
+    .field span { font-size:.82rem; color:var(--muted); }
+    input[type=number], input[type=range] { width:100%; accent-color: var(--accent); }
+    input[type=number] { background:#0d1426; color:var(--ink); border:1px solid var(--line); border-radius:10px; padding:9px; }
+    .stat { display:grid; grid-template-columns: repeat(4, 1fr); gap:10px; margin-top:12px; }
+    .pill { background:#0d1426; border:1px solid var(--line); border-radius:12px; padding:10px; }
+    .pill strong { display:block; font-size:1.05rem; }
+    .pill span { color:var(--muted); font-size:.78rem; }
+    .log { min-height: 52px; color:var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:.86rem; white-space:pre-wrap; }
+    .small { font-size:.9rem; }
+    @media (max-width: 860px) { .hero, .grid { grid-template-columns:1fr; } .controls { grid-template-columns: repeat(2, 1fr); } .stat { grid-template-columns: repeat(2, 1fr); } }
+  </style>
+</head>
+<body>
+<main>
+  <section class="hero">
+    <div>
+      <h1>Growing Neural Cellular Automata</h1>
+      <p>
+        A browser-only TensorFlow.js experiment inspired by <em>Growing Neural Cellular Automata</em>.
+        Train a local update rule directly in this tab, pause/resume it, and save checkpoints to this browser.
+      </p>
+      <p class="small">Weights are stored in <strong>IndexedDB</strong>; lightweight training metadata is stored in <strong>localStorage</strong>. Nothing is uploaded to a server.</p>
+    </div>
+    <div class="card">
+      <h2>Status</h2>
+      <div id="log" class="log">Loading TensorFlow.js…</div>
+      <div class="stat">
+        <div class="pill"><strong id="stepStat">0</strong><span>steps</span></div>
+        <div class="pill"><strong id="lossStat">–</strong><span>loss</span></div>
+        <div class="pill"><strong id="backendStat">–</strong><span>backend</span></div>
+        <div class="pill"><strong id="memStat">–</strong><span>tensors</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="grid">
+    <div class="card">
+      <h2>Target</h2>
+      <canvas id="targetCanvas" width="48" height="48"></canvas>
+      <div class="controls">
+        <label class="file">Upload PNG<input id="fileInput" type="file" accept="image/*"></label>
+        <button id="defaultTargetBtn">Default target</button>
+        <button id="clearCheckpointBtn">Clear saved</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Current growth preview</h2>
+      <canvas id="previewCanvas" width="48" height="48"></canvas>
+      <div class="controls">
+        <button id="trainBtn">Train</button>
+        <button id="pauseBtn" disabled>Pause</button>
+        <button id="resetBtn">Reset model</button>
+        <button id="saveBtn">Save checkpoint</button>
+        <button id="loadBtn">Load checkpoint</button>
+        <button id="growBtn">Run growth</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" style="margin-top:16px">
+    <h2>Training settings</h2>
+    <div class="settings">
+      <label class="field"><span>Grid size</span><input id="sizeInput" type="number" min="24" max="96" step="8" value="48"></label>
+      <label class="field"><span>Batch size</span><input id="batchInput" type="number" min="1" max="8" step="1" value="2"></label>
+      <label class="field"><span>Learning rate</span><input id="lrInput" type="number" min="0.0001" max="0.01" step="0.0001" value="0.002"></label>
+      <label class="field"><span>Fire rate</span><input id="fireInput" type="number" min="0.1" max="1" step="0.05" value="0.5"></label>
+      <label class="field"><span>Min CA steps per batch</span><input id="minIterInput" type="number" min="8" max="128" step="4" value="48"></label>
+      <label class="field"><span>Max CA steps per batch</span><input id="maxIterInput" type="number" min="8" max="160" step="4" value="64"></label>
+    </div>
+    <p class="small">Tip: 48×48 with batch 2 is a good browser default. 64×64 works on stronger desktops but can feel slow.</p>
+  </section>
+</main>
+
+<script>
+(() => {
+  const CHANNELS = 16;
+  const MODEL_URL = "indexeddb://mikadou-growing-nca-model";
+  const META_KEY = "mikadou-growing-nca-meta";
+
+  const targetCanvas = document.getElementById("targetCanvas");
+  const previewCanvas = document.getElementById("previewCanvas");
+  const tctx = targetCanvas.getContext("2d", { willReadFrequently: true });
+  const pctx = previewCanvas.getContext("2d");
+
+  const els = {
+    log: document.getElementById("log"),
+    step: document.getElementById("stepStat"),
+    loss: document.getElementById("lossStat"),
+    backend: document.getElementById("backendStat"),
+    mem: document.getElementById("memStat"),
+    train: document.getElementById("trainBtn"),
+    pause: document.getElementById("pauseBtn"),
+    reset: document.getElementById("resetBtn"),
+    save: document.getElementById("saveBtn"),
+    load: document.getElementById("loadBtn"),
+    grow: document.getElementById("growBtn"),
+    def: document.getElementById("defaultTargetBtn"),
+    clear: document.getElementById("clearCheckpointBtn"),
+    file: document.getElementById("fileInput"),
+    size: document.getElementById("sizeInput"),
+    batch: document.getElementById("batchInput"),
+    lr: document.getElementById("lrInput"),
+    fire: document.getElementById("fireInput"),
+    minIter: document.getElementById("minIterInput"),
+    maxIter: document.getElementById("maxIterInput")
+  };
+
+  let model, optimizer, targetTensor, perceptionKernel;
+  let running = false;
+  let step = Number(localStorage.getItem(META_KEY + ":step") || 0);
+  let lastLoss = NaN;
+
+  function log(msg) { els.log.textContent = msg; }
+  function gridSize() { return Math.max(24, Math.min(96, Number(els.size.value) || 48)); }
+  function batchSize() { return Math.max(1, Math.min(8, Number(els.batch.value) || 2)); }
+  function fireRate() { return Math.max(0.05, Math.min(1, Number(els.fire.value) || 0.5)); }
+  function minIter() { return Math.max(1, Number(els.minIter.value) || 48); }
+  function maxIter() { return Math.max(minIter(), Number(els.maxIter.value) || 64); }
+  function randomInt(lo, hi) { return lo + Math.floor(Math.random() * (hi - lo + 1)); }
+
+  function updateStats() {
+    els.step.textContent = String(step);
+    els.loss.textContent = Number.isFinite(lastLoss) ? lastLoss.toExponential(2) : "–";
+    els.backend.textContent = tf.getBackend();
+    els.mem.textContent = String(tf.memory().numTensors);
+  }
+
+  function makePerceptionKernel() {
+    const ident = [0,0,0, 0,1,0, 0,0,0];
+    const sobelX = [-1,0,1, -2,0,2, -1,0,1].map(v => v / 8);
+    const sobelY = [-1,-2,-1, 0,0,0, 1,2,1].map(v => v / 8);
+    const data = new Float32Array(3 * 3 * CHANNELS * 3);
+    for (let y = 0; y < 3; y++) for (let x = 0; x < 3; x++) {
+      const k = y * 3 + x;
+      for (let c = 0; c < CHANNELS; c++) {
+        const base = (((y * 3 + x) * CHANNELS + c) * 3);
+        data[base + 0] = ident[k];
+        data[base + 1] = sobelX[k];
+        data[base + 2] = sobelY[k];
+      }
+    }
+    return tf.tensor4d(data, [3, 3, CHANNELS, 3]);
+  }
+
+  function createModel() {
+    const m = tf.sequential();
+    m.add(tf.layers.conv2d({
+      inputShape: [null, null, CHANNELS * 3],
+      filters: 128,
+      kernelSize: 1,
+      activation: "relu",
+      padding: "same",
+      kernelInitializer: "glorotNormal"
+    }));
+    m.add(tf.layers.conv2d({
+      filters: CHANNELS,
+      kernelSize: 1,
+      activation: "linear",
+      padding: "same",
+      useBias: false,
+      kernelInitializer: "zeros"
+    }));
+    return m;
+  }
+
+  function resizeCanvases(size) {
+    for (const c of [targetCanvas, previewCanvas]) {
+      c.width = size;
+      c.height = size;
+    }
+  }
+
+  function drawDefaultTarget() {
+    const s = gridSize();
+    resizeCanvases(s);
+    tctx.clearRect(0, 0, s, s);
+    const cx = s / 2, cy = s / 2;
+    tctx.save();
+    tctx.translate(cx, cy);
+    for (let i = 0; i < 8; i++) {
+      tctx.rotate(Math.PI / 4);
+      const g = tctx.createRadialGradient(s * 0.19, 0, 1, s * 0.22, 0, s * 0.18);
+      g.addColorStop(0, "rgba(255,246,122,0.98)");
+      g.addColorStop(1, "rgba(255,126,80,0.78)");
+      tctx.fillStyle = g;
+      tctx.beginPath();
+      tctx.ellipse(s * 0.18, 0, s * 0.19, s * 0.08, 0, 0, Math.PI * 2);
+      tctx.fill();
+    }
+    tctx.restore();
+    tctx.fillStyle = "rgba(80,255,209,1)";
+    tctx.beginPath();
+    tctx.arc(cx, cy, s * 0.12, 0, Math.PI * 2);
+    tctx.fill();
+    updateTargetTensor();
+  }
+
+  function updateTargetTensor() {
+    if (targetTensor) targetTensor.dispose();
+    targetTensor = tf.tidy(() => tf.browser.fromPixels(targetCanvas, 4).toFloat().div(255).expandDims(0));
+  }
+
+  async function drawUploadedTarget(file) {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const s = gridSize();
+      resizeCanvases(s);
+      tctx.clearRect(0, 0, s, s);
+      const scale = Math.min(s / img.width, s / img.height);
+      const w = img.width * scale, h = img.height * scale;
+      tctx.drawImage(img, (s - w) / 2, (s - h) / 2, w, h);
+      updateTargetTensor();
+      URL.revokeObjectURL(url);
+      log("Loaded target image. Press Train to start.");
+    };
+    img.src = url;
+  }
+
+  function makeSeed(batch) {
+    const s = gridSize();
+    const buf = tf.buffer([batch, s, s, CHANNELS]);
+    const mid = Math.floor(s / 2);
+    for (let b = 0; b < batch; b++) {
+      buf.set(1, b, mid, mid, 3); // alpha channel alive seed
+    }
+    return buf.toTensor();
+  }
+
+  function perceive(x) {
+    return tf.depthwiseConv2d(x, perceptionKernel, 1, "same");
+  }
+
+  function aliveMask(x) {
+    const alpha = x.slice([0,0,0,3], [-1,-1,-1,1]);
+    return tf.maxPool(alpha, 3, 1, "same").greater(0.1).toFloat();
+  }
+
+  function caStep(x) {
+    const pre = aliveMask(x);
+    const dx = model.apply(perceive(x));
+    const mask = tf.randomUniform([x.shape[0], x.shape[1], x.shape[2], 1]).less(fireRate()).toFloat();
+    const y = x.add(dx.mul(mask));
+    const post = aliveMask(y);
+    return y.mul(pre.mul(post));
+  }
+
+  function lossFor(x) {
+    const rgba = x.slice([0,0,0,0], [-1,-1,-1,4]);
+    const target = targetTensor.tile([x.shape[0], 1, 1, 1]);
+    return rgba.sub(target).square().mean();
+  }
+
+  async function renderPreview(iterations = 96) {
+    const img = tf.tidy(() => {
+      let x = makeSeed(1);
+      for (let i = 0; i < iterations; i++) x = caStep(x);
+      return x.slice([0,0,0,0], [1,-1,-1,4]).squeeze().clipByValue(0, 1);
+    });
+    await tf.browser.toPixels(img, previewCanvas);
+    img.dispose();
+  }
+
+  async function trainOneStep() {
+    const n = randomInt(minIter(), maxIter());
+    const lossTensor = optimizer.minimize(() => tf.tidy(() => {
+      let x = makeSeed(batchSize());
+      for (let i = 0; i < n; i++) x = caStep(x);
+      return lossFor(x);
+    }), true);
+    lastLoss = (await lossTensor.data())[0];
+    lossTensor.dispose();
+    step += 1;
+    localStorage.setItem(META_KEY + ":step", String(step));
+    updateStats();
+    if (step % 10 === 0) await renderPreview(maxIter());
+    if (step % 100 === 0) await saveCheckpoint(false);
+  }
+
+  async function trainLoop() {
+    if (running) return;
+    running = true;
+    els.train.disabled = true;
+    els.pause.disabled = false;
+    log("Training… keep this tab open. Checkpoints are saved every 100 steps.");
+    while (running) {
+      await trainOneStep();
+      await tf.nextFrame();
+    }
+  }
+
+  function pause() {
+    running = false;
+    els.train.disabled = false;
+    els.pause.disabled = true;
+    log("Paused. You can save or resume training.");
+  }
+
+  async function saveCheckpoint(verbose = true) {
+    await model.save(MODEL_URL);
+    const meta = { step, size: gridSize(), savedAt: new Date().toISOString() };
+    localStorage.setItem(META_KEY, JSON.stringify(meta));
+    if (verbose) log("Saved checkpoint to this browser's IndexedDB.");
+  }
+
+  async function loadCheckpoint() {
+    try {
+      if (model) model.dispose();
+      model = await tf.loadLayersModel(MODEL_URL);
+      optimizer = tf.train.adam(Number(els.lr.value) || 0.002);
+      const meta = JSON.parse(localStorage.getItem(META_KEY) || "{}");
+      if (meta.size) {
+        els.size.value = meta.size;
+        drawDefaultTarget();
+      }
+      step = Number(meta.step || localStorage.getItem(META_KEY + ":step") || 0);
+      updateStats();
+      await renderPreview(maxIter());
+      log("Loaded checkpoint. Adam momentum is reset, but model weights are restored.");
+    } catch (err) {
+      log("No checkpoint found in this browser yet.");
+    }
+  }
+
+  async function resetModel() {
+    pause();
+    if (model) model.dispose();
+    model = createModel();
+    optimizer = tf.train.adam(Number(els.lr.value) || 0.002);
+    step = 0; lastLoss = NaN;
+    localStorage.setItem(META_KEY + ":step", "0");
+    updateStats();
+    await renderPreview(maxIter());
+    log("Model reset. Press Train to learn the current target.");
+  }
+
+  async function clearCheckpoint() {
+    pause();
+    try { await tf.io.removeModel(MODEL_URL); } catch (_) {}
+    localStorage.removeItem(META_KEY);
+    localStorage.removeItem(META_KEY + ":step");
+    log("Removed saved checkpoint from this browser.");
+  }
+
+  async function init() {
+    await tf.ready();
+    perceptionKernel = makePerceptionKernel();
+    model = createModel();
+    optimizer = tf.train.adam(Number(els.lr.value) || 0.002);
+    drawDefaultTarget();
+    updateStats();
+    await renderPreview(32);
+    log("Ready. Upload a PNG or use the default target, then press Train.");
+  }
+
+  els.train.onclick = trainLoop;
+  els.pause.onclick = pause;
+  els.reset.onclick = resetModel;
+  els.save.onclick = () => saveCheckpoint(true);
+  els.load.onclick = loadCheckpoint;
+  els.grow.onclick = async () => { log("Rendering growth preview…"); await renderPreview(maxIter()); log("Rendered preview from a single seed."); };
+  els.def.onclick = () => { drawDefaultTarget(); resetModel(); };
+  els.clear.onclick = clearCheckpoint;
+  els.file.onchange = e => { if (e.target.files[0]) drawUploadedTarget(e.target.files[0]); };
+  els.size.onchange = () => { drawDefaultTarget(); resetModel(); };
+
+  init();
+})();
+</script>
+</body>
+</html>
