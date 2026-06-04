@@ -139,7 +139,8 @@
   }
   function perceive(x){ return tf.depthwiseConv2d(x, perceptionKernel, 1, 'same'); }
   function aliveMask(x){
-    return tf.maxPool(x.slice([0,0,0,3],[-1,-1,-1,1]), 3, 1, 'same').greater(0.1).toFloat();
+    const alpha = x.slice([0,0,0,3],[-1,-1,-1,1]).clipByValue(0, 1);
+    return tf.maxPool(alpha, 3, 1, 'same').mul(10).clipByValue(0, 1);
   }
   function stopGrad(x){ return tf.stopGradient ? tf.stopGradient(x) : x.clone(); }
   function caStep(x){
@@ -232,12 +233,12 @@
     step++; localStorage.setItem(META_KEY + ':step', String(step)); stats();
     if(step % (IS_PHONE ? 3 : 5) === 0) await renderPreview(maxIter());
     if(step % 50 === 0) await save(false);
-    log('Training completed step ' + step + '. Alive mask enabled; worst sample reseeded.');
+    log('Training completed step ' + step + '. Differentiable alive gate enabled; worst sample reseeded.');
   }
   async function loop(){
     if(running) return; running=true; els.train.disabled=true; els.pause.disabled=false;
     animatingRun = false;
-    log('Training started with alive mask enabled.'); await nextPaint();
+    log('Training started with differentiable alive gate enabled.'); await nextPaint();
     try{ while(running){ await trainOneStep(); await nextPaint(); } }
     catch(err){ running=false; els.train.disabled=false; els.pause.disabled=true; logError('Training stopped:', err); }
   }
@@ -247,7 +248,7 @@
     if(model) model.dispose(); model=createModel(); optimizer=tf.train.adam(val(els.lr,.002));
     step=0; lastLoss=NaN; lastBest=NaN; lastWorst=NaN; initPool(); stats(); await renderPreview(1);
     const ctx=runCanvas.getContext('2d'); ctx.clearRect(0,0,runCanvas.width,runCanvas.height);
-    log('Model and pool reset. Alive mask enabled.');
+    log('Model and pool reset. Differentiable alive gate enabled.');
   }
   async function save(verbose=true){
     await model.save(MODEL_URL);
@@ -261,7 +262,7 @@
       const meta=JSON.parse(localStorage.getItem(META_KEY)||'{}');
       if(meta.size) els.size.value=meta.size; if(meta.pool) els.pool.value=meta.pool;
       drawDefaultTarget(); initPool(); step=Number(meta.step||localStorage.getItem(META_KEY+':step')||0); stats(); await renderPreview(maxIter());
-      if(verbose) log('Loaded saved model. Use New seed to run a clean alive-masked rollout.');
+      if(verbose) log('Loaded saved model. Use New seed to run a clean gated rollout.');
       return true;
     } catch(e){ log('No saved model found in this browser. Train and Save first.'); return false; }
   }
@@ -273,7 +274,7 @@
       await tf.ready(); try{ await tf.setBackend('webgl'); await tf.ready(); }catch(e){}
       perceptionKernel=makePerceptionKernel(); model=createModel(); optimizer=tf.train.adam(val(els.lr,.002));
       drawDefaultTarget(); initPool(); stats(); await renderPreview(1); clearRun();
-      log('Ready. Alive mask enabled. Presets added: Flower, Car, House, Cat.');
+      log('Ready. Differentiable alive gate enabled. Presets added: Flower, Car, House, Cat.');
     } catch(err){ logError('Initialization failed:', err); }
   }
   els.train.onclick=loop;
