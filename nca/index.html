@@ -13,7 +13,7 @@
     canvas{width:100%;height:auto;border:1px solid var(--line);border-radius:14px;background:#05070d;image-rendering:pixelated}.controls{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
     button,label.file{border:1px solid var(--line);background:#1a2440;color:var(--ink);padding:10px;border-radius:12px;cursor:pointer;font-weight:700;text-align:center}button:hover,label.file:hover{background:#24335a}button:disabled{opacity:.45;cursor:not-allowed}input[type=file]{display:none}
     .settings{display:grid;grid-template-columns:repeat(4,1fr);gap:9px}.field{display:flex;flex-direction:column;gap:4px}.field span,.pill span{font-size:.78rem;color:var(--muted)}input[type=number]{width:100%;background:#0d1426;color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:9px}
-    .stat{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-top:10px}.pill{background:#0d1426;border:1px solid var(--line);border-radius:12px;padding:9px}.pill strong{display:block}.log{min-height:90px;color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.83rem;white-space:pre-wrap}.small{font-size:.9rem}.mobile-note{display:none;color:var(--accent)}
+    .stat{display:grid;grid-template-columns:repeat(7,1fr);gap:8px;margin-top:10px}.pill{background:#0d1426;border:1px solid var(--line);border-radius:12px;padding:9px}.pill strong{display:block}.log{min-height:90px;color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.83rem;white-space:pre-wrap}.small{font-size:.9rem}.mobile-note{display:none;color:var(--accent)}
     @media(max-width:860px){main{padding:16px 10px 32px}.hero,.grid{grid-template-columns:1fr}.controls{grid-template-columns:repeat(3,1fr)}.settings{grid-template-columns:repeat(2,1fr)}.stat{grid-template-columns:repeat(2,1fr)}.mobile-note{display:block}}
   </style>
 </head>
@@ -22,7 +22,7 @@
   <section class="hero">
     <div>
       <h1>Growing Neural Cellular Automata</h1>
-      <p>Train a tiny neural cellular automaton directly in this browser tab. This build uses a persistent sample pool, reseeds the worst sample in each batch, and shows mean/best/worst batch losses.</p>
+      <p>Train a tiny neural cellular automaton directly in this browser tab. This build uses a persistent sample pool, reseeds the worst sample in each batch, and can now replay a single growth rollout step by step.</p>
       <p class="small">Weights are saved in IndexedDB. Training-pool states live in RAM and reset when the model resets.</p>
       <p class="mobile-note">Phone mode starts small. Increase batch/rollout only after the step counter moves smoothly.</p>
     </div>
@@ -30,7 +30,8 @@
       <h2>Status</h2>
       <div id="log" class="log">Loading TensorFlow.js…</div>
       <div class="stat">
-        <div class="pill"><strong id="stepStat">0</strong><span>steps</span></div>
+        <div class="pill"><strong id="stepStat">0</strong><span>train steps</span></div>
+        <div class="pill"><strong id="rolloutStepStat">0</strong><span>rollout step</span></div>
         <div class="pill"><strong id="lossStat">–</strong><span>mean loss</span></div>
         <div class="pill"><strong id="bestStat">–</strong><span>best</span></div>
         <div class="pill"><strong id="worstStat">–</strong><span>worst</span></div>
@@ -56,10 +57,14 @@
       <div class="controls">
         <button id="trainBtn">Train</button>
         <button id="pauseBtn" disabled>Pause</button>
-        <button id="oneBtn">1 step</button>
-        <button id="resetBtn">Reset</button>
+        <button id="oneBtn">1 train step</button>
+        <button id="resetBtn">Reset model</button>
         <button id="saveBtn">Save</button>
         <button id="loadBtn">Load</button>
+        <button id="newRunBtn">New run</button>
+        <button id="stepRunBtn">Step</button>
+        <button id="animateRunBtn">Animate</button>
+        <button id="stopRunBtn">Stop</button>
       </div>
     </div>
   </section>
@@ -79,6 +84,6 @@
     <p class="small">Defaults are tuned toward better visual quality: 24×24, batch 2, 16–40 CA steps, pool 64, reseed 10%.</p>
   </section>
 </main>
-<script src="./app.js?v=4"></script>
+<script src="./app.js?v=5"></script>
 </body>
 </html>
