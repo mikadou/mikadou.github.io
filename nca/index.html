@@ -23,7 +23,7 @@
     <div>
       <h1>Growing Neural Cellular Automata</h1>
       <p>Train a tiny neural cellular automaton in the browser, then replay one single growth rollout step by step on a separate canvas.</p>
-      <p class="small">Model weights are saved in IndexedDB. Training-pool states and rollout state live in RAM.</p>
+      <p class="small">This build avoids hard comparison ops in the training graph and uses a soft alive gate for cleaner backgrounds.</p>
       <p class="mobile-note">Phone mode starts small. Use Load saved model before running a trained model after refresh.</p>
     </div>
     <div class="card">
@@ -96,12 +96,12 @@
     </div>
     <div class="card">
       <h2>Run notes</h2>
-      <p class="small">Use this section after training or after tapping <strong>Load saved model</strong>. It does not use the training pool; it runs one fresh seed forward with the current model.</p>
-      <p class="small">The rollout is stochastic because the NCA uses a random cell-update mask. Tapping <strong>New seed</strong> starts a new rollout from one center cell.</p>
-      <p class="small">If the run looks empty, tap <strong>Load saved model</strong> first, then <strong>New seed</strong>.</p>
+      <p class="small">Use this section after training or after tapping <strong>Load saved model</strong>. It runs one fresh seed forward with the current model.</p>
+      <p class="small">The update is now deterministic-scaled instead of hard stochastic, avoiding TensorFlow.js comparison-gradient errors.</p>
+      <p class="small">Target presets are injected by the script: Flower, Car, House, Cat.</p>
     </div>
   </section>
 </main>
-<script src="./app.js?v=6"></script>
+<script src="./app-v8.js?v=8"></script>
 </body>
 </html>
