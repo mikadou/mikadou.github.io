@@ -8,13 +8,13 @@
   <style>
     :root{color-scheme:dark;--bg:#090d18;--card:#121a2d;--ink:#eef5ff;--muted:#9fb0ca;--accent:#7fffe4;--line:#2c3859}
     *{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:radial-gradient(circle at top,#1e2a4a 0,var(--bg) 56%);color:var(--ink)}
-    main{max-width:1100px;margin:0 auto;padding:24px 14px 40px}h1{margin:.1em 0 .2em;font-size:clamp(2rem,8vw,4rem);letter-spacing:-.05em}h2{font-size:1.05rem;margin:0 0 10px}p{color:var(--muted);line-height:1.45}
-    .hero,.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.card{background:rgba(18,26,45,.96);border:1px solid var(--line);border-radius:18px;padding:14px;box-shadow:0 18px 60px rgba(0,0,0,.25)}
+    main{max-width:1160px;margin:0 auto;padding:24px 14px 40px}h1{margin:.1em 0 .2em;font-size:clamp(2rem,8vw,4rem);letter-spacing:-.05em}h2{font-size:1.08rem;margin:0 0 10px}p{color:var(--muted);line-height:1.45}
+    .hero,.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.three{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-top:14px}.card{background:rgba(18,26,45,.96);border:1px solid var(--line);border-radius:18px;padding:14px;box-shadow:0 18px 60px rgba(0,0,0,.25)}
     canvas{width:100%;height:auto;border:1px solid var(--line);border-radius:14px;background:#05070d;image-rendering:pixelated}.controls{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
     button,label.file{border:1px solid var(--line);background:#1a2440;color:var(--ink);padding:10px;border-radius:12px;cursor:pointer;font-weight:700;text-align:center}button:hover,label.file:hover{background:#24335a}button:disabled{opacity:.45;cursor:not-allowed}input[type=file]{display:none}
     .settings{display:grid;grid-template-columns:repeat(4,1fr);gap:9px}.field{display:flex;flex-direction:column;gap:4px}.field span,.pill span{font-size:.78rem;color:var(--muted)}input[type=number]{width:100%;background:#0d1426;color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:9px}
-    .stat{display:grid;grid-template-columns:repeat(7,1fr);gap:8px;margin-top:10px}.pill{background:#0d1426;border:1px solid var(--line);border-radius:12px;padding:9px}.pill strong{display:block}.log{min-height:90px;color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.83rem;white-space:pre-wrap}.small{font-size:.9rem}.mobile-note{display:none;color:var(--accent)}
-    @media(max-width:860px){main{padding:16px 10px 32px}.hero,.grid{grid-template-columns:1fr}.controls{grid-template-columns:repeat(3,1fr)}.settings{grid-template-columns:repeat(2,1fr)}.stat{grid-template-columns:repeat(2,1fr)}.mobile-note{display:block}}
+    .stat{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-top:10px}.pill{background:#0d1426;border:1px solid var(--line);border-radius:12px;padding:9px}.pill strong{display:block}.log{min-height:86px;color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.83rem;white-space:pre-wrap}.small{font-size:.9rem}.mobile-note{display:none;color:var(--accent)}.section-title{margin-top:20px;margin-bottom:8px;color:var(--accent);font-weight:800;letter-spacing:.02em}.run-controls{grid-template-columns:repeat(4,1fr)}
+    @media(max-width:900px){main{padding:16px 10px 32px}.hero,.grid,.three{grid-template-columns:1fr}.controls,.run-controls{grid-template-columns:repeat(2,1fr)}.settings{grid-template-columns:repeat(2,1fr)}.stat{grid-template-columns:repeat(2,1fr)}.mobile-note{display:block}}
   </style>
 </head>
 <body>
@@ -22,26 +22,26 @@
   <section class="hero">
     <div>
       <h1>Growing Neural Cellular Automata</h1>
-      <p>Train a tiny neural cellular automaton directly in this browser tab. This build uses a persistent sample pool, reseeds the worst sample in each batch, and can now replay a single growth rollout step by step.</p>
-      <p class="small">Weights are saved in IndexedDB. Training-pool states live in RAM and reset when the model resets.</p>
-      <p class="mobile-note">Phone mode starts small. Increase batch/rollout only after the step counter moves smoothly.</p>
+      <p>Train a tiny neural cellular automaton in the browser, then replay one single growth rollout step by step on a separate canvas.</p>
+      <p class="small">Model weights are saved in IndexedDB. Training-pool states and rollout state live in RAM.</p>
+      <p class="mobile-note">Phone mode starts small. Use Load saved model before running a trained model after refresh.</p>
     </div>
     <div class="card">
       <h2>Status</h2>
       <div id="log" class="log">Loading TensorFlow.js…</div>
       <div class="stat">
         <div class="pill"><strong id="stepStat">0</strong><span>train steps</span></div>
-        <div class="pill"><strong id="rolloutStepStat">0</strong><span>rollout step</span></div>
+        <div class="pill"><strong id="rolloutStepStat">0</strong><span>run step</span></div>
         <div class="pill"><strong id="lossStat">–</strong><span>mean loss</span></div>
         <div class="pill"><strong id="bestStat">–</strong><span>best</span></div>
         <div class="pill"><strong id="worstStat">–</strong><span>worst</span></div>
         <div class="pill"><strong id="backendStat">–</strong><span>backend</span></div>
-        <div class="pill"><strong id="memStat">–</strong><span>tensors</span></div>
       </div>
     </div>
   </section>
 
-  <section class="grid" style="margin-top:14px">
+  <div class="section-title">Training</div>
+  <section class="three">
     <div class="card">
       <h2>Target</h2>
       <canvas id="targetCanvas" width="24" height="24"></canvas>
@@ -52,38 +52,56 @@
       </div>
     </div>
     <div class="card">
-      <h2>Growth preview</h2>
+      <h2>Training preview</h2>
       <canvas id="previewCanvas" width="24" height="24"></canvas>
       <div class="controls">
         <button id="trainBtn">Train</button>
         <button id="pauseBtn" disabled>Pause</button>
         <button id="oneBtn">1 train step</button>
         <button id="resetBtn">Reset model</button>
-        <button id="saveBtn">Save</button>
-        <button id="loadBtn">Load</button>
-        <button id="newRunBtn">New run</button>
-        <button id="stepRunBtn">Step</button>
-        <button id="animateRunBtn">Animate</button>
-        <button id="stopRunBtn">Stop</button>
+        <button id="saveBtn">Save model</button>
+        <button id="loadBtn">Load model</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Training settings</h2>
+      <div class="settings" style="grid-template-columns:1fr 1fr">
+        <label class="field"><span>Grid</span><input id="sizeInput" type="number" min="16" max="64" step="4" value="24"></label>
+        <label class="field"><span>Batch</span><input id="batchInput" type="number" min="1" max="8" step="1" value="2"></label>
+        <label class="field"><span>LR</span><input id="lrInput" type="number" min="0.0001" max="0.02" step="0.0005" value="0.002"></label>
+        <label class="field"><span>Fire</span><input id="fireInput" type="number" min="0.1" max="1" step="0.05" value="0.5"></label>
+        <label class="field"><span>Min steps</span><input id="minIterInput" type="number" min="1" max="64" step="1" value="16"></label>
+        <label class="field"><span>Max steps</span><input id="maxIterInput" type="number" min="1" max="96" step="1" value="40"></label>
+        <label class="field"><span>Pool</span><input id="poolInput" type="number" min="8" max="128" step="8" value="64"></label>
+        <label class="field"><span>Reseed %</span><input id="reseedInput" type="number" min="0" max="100" step="5" value="10"></label>
       </div>
     </div>
   </section>
 
-  <section class="card" style="margin-top:14px">
-    <h2>Training settings</h2>
-    <div class="settings">
-      <label class="field"><span>Grid size</span><input id="sizeInput" type="number" min="16" max="64" step="4" value="24"></label>
-      <label class="field"><span>Batch size</span><input id="batchInput" type="number" min="1" max="8" step="1" value="2"></label>
-      <label class="field"><span>Learning rate</span><input id="lrInput" type="number" min="0.0001" max="0.02" step="0.0005" value="0.002"></label>
-      <label class="field"><span>Fire rate</span><input id="fireInput" type="number" min="0.1" max="1" step="0.05" value="0.5"></label>
-      <label class="field"><span>Min CA steps</span><input id="minIterInput" type="number" min="1" max="64" step="1" value="16"></label>
-      <label class="field"><span>Max CA steps</span><input id="maxIterInput" type="number" min="1" max="96" step="1" value="40"></label>
-      <label class="field"><span>Pool size</span><input id="poolInput" type="number" min="8" max="128" step="8" value="64"></label>
-      <label class="field"><span>Reseed %</span><input id="reseedInput" type="number" min="0" max="100" step="5" value="10"></label>
+  <div class="section-title">Run trained model</div>
+  <section class="grid">
+    <div class="card">
+      <h2>Single rollout viewer</h2>
+      <canvas id="runCanvas" width="24" height="24"></canvas>
+      <div class="controls run-controls">
+        <button id="loadRunBtn">Load saved model</button>
+        <button id="newRunBtn">New seed</button>
+        <button id="stepRunBtn">Step</button>
+        <button id="animateRunBtn">Animate</button>
+        <button id="stopRunBtn">Stop</button>
+        <button id="run10Btn">+10 steps</button>
+        <button id="run40Btn">+40 steps</button>
+        <button id="clearRunBtn">Clear run</button>
+      </div>
     </div>
-    <p class="small">Defaults are tuned toward better visual quality: 24×24, batch 2, 16–40 CA steps, pool 64, reseed 10%.</p>
+    <div class="card">
+      <h2>Run notes</h2>
+      <p class="small">Use this section after training or after tapping <strong>Load saved model</strong>. It does not use the training pool; it runs one fresh seed forward with the current model.</p>
+      <p class="small">The rollout is stochastic because the NCA uses a random cell-update mask. Tapping <strong>New seed</strong> starts a new rollout from one center cell.</p>
+      <p class="small">If the run looks empty, tap <strong>Load saved model</strong> first, then <strong>New seed</strong>.</p>
+    </div>
   </section>
 </main>
-<script src="./app.js?v=5"></script>
+<script src="./app.js?v=6"></script>
 </body>
 </html>
