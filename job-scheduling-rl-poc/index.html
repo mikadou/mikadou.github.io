@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Job Scheduling RL POC</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header>
+    <h1>Job Scheduling RL POC</h1>
+    <p>Fixed-order parallel-machine scheduling with optional changeovers, trained by policy-gradient self-play against the previous generation.</p>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>Problem</h2>
+      <div class="grid">
+        <label>Machines <input id="numMachines" type="number" min="2" max="30" value="10"></label>
+        <label>Jobs per instance <input id="numJobs" type="number" min="5" max="1000" value="100"></label>
+        <label>Processing times <input id="processingTimes" value="1,2,5,20"></label>
+        <label>Processing probs <input id="processingProbs" value="0.50,0.30,0.15,0.05"></label>
+        <label>Job types <input id="numTypes" type="number" min="1" max="12" value="4"></label>
+        <label>Type probs <input id="typeProbs" value="0.25,0.25,0.25,0.25"></label>
+        <label>Changeovers
+          <select id="changeoverMode">
+            <option value="zero">zero matrix</option>
+            <option value="structured" selected>structured families</option>
+            <option value="custom">custom matrix</option>
+          </select>
+        </label>
+        <label>Custom matrix<textarea id="customMatrix" rows="4">0,2,8,8
+2,0,8,8
+8,8,0,2
+8,8,2,0</textarea></label>
+      </div>
+      <p class="note">Empty-machine changeover is always zero.</p>
+    </section>
+
+    <section class="panel">
+      <h2>Training</h2>
+      <div class="grid">
+        <label>Reward mode
+          <select id="rewardMode">
+            <option value="win_loss">win/loss</option>
+            <option value="difference">makespan difference</option>
+            <option value="normalized_difference" selected>normalized difference</option>
+          </select>
+        </label>
+        <label>Batch episodes <input id="batchSize" type="number" min="1" max="512" value="64"></label>
+        <label>Learning rate <input id="learningRate" type="number" step="0.0001" value="0.003"></label>
+        <label>Hidden units <input id="hiddenSize" type="number" min="8" max="512" value="128"></label>
+        <label>Entropy coef <input id="entropyCoef" type="number" step="0.001" value="0.01"></label>
+        <label>Updates per run <input id="updatesPerRun" type="number" min="1" max="10000" value="200"></label>
+        <label>Snapshot eval episodes <input id="snapshotEvalEpisodes" type="number" min="20" max="5000" value="500"></label>
+        <label>Snapshot min win rate <input id="snapshotMinWinRate" type="number" min="0.5" max="1" step="0.01" value="0.55"></label>
+        <label>Snapshot min avg improvement <input id="snapshotMinAvgImprovement" type="number" step="0.0001" value="0.000"></label>
+        <label>Snapshot check interval <input id="snapshotInterval" type="number" min="1" max="1000" value="25"></label>
+      </div>
+      <div class="buttons">
+        <button id="initBtn">Initialize</button>
+        <button id="trainBtn">Train</button>
+        <button id="stopBtn">Stop</button>
+        <button id="evalBtn">Evaluate</button>
+        <button id="downloadBtn">Download results JSON</button>
+      </div>
+      <p class="note">Self-play opponent is the frozen previous generation. Opponent pools are intentionally not used in this implementation.</p>
+    </section>
+
+    <section class="panel results">
+      <h2>Results</h2>
+      <div id="status">Not initialized.</div>
+      <table id="metricsTable">
+        <thead><tr><th>Method</th><th>Mean</th><th>Median</th><th>P90</th><th>P95</th><th>Win vs load-list</th><th>Win vs cost-greedy</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <canvas id="chart" width="900" height="280"></canvas>
+    </section>
+
+    <section class="panel">
+      <h2>Log</h2>
+      <pre id="log"></pre>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
