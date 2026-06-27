@@ -49,7 +49,14 @@
         </label>
         <label>Batch episodes <input id="batchSize" type="number" min="1" max="512" value="64"></label>
         <label>Learning rate <input id="learningRate" type="number" step="0.0001" value="0.003"></label>
-        <label>Hidden units <input id="hiddenSize" type="number" min="8" max="512" value="128"></label>
+        <label>Hidden layers
+          <select id="hiddenLayers">
+            <option value="1">1 hidden layer</option>
+            <option value="2" selected>2 hidden layers</option>
+          </select>
+        </label>
+        <label>Hidden units layer 1 <input id="hiddenSize" type="number" min="8" max="512" value="128"></label>
+        <label>Hidden units layer 2 <input id="hiddenSize2" type="number" min="8" max="512" value="64"></label>
         <label>Entropy coef <input id="entropyCoef" type="number" step="0.001" value="0.01"></label>
         <label>Updates per run <input id="updatesPerRun" type="number" min="1" max="10000" value="200"></label>
         <label>Snapshot eval episodes <input id="snapshotEvalEpisodes" type="number" min="20" max="5000" value="500"></label>
@@ -64,7 +71,7 @@
         <button id="evalBtn">Evaluate</button>
         <button id="downloadBtn">Download results JSON</button>
       </div>
-      <p class="note">Self-play opponent is the frozen previous generation. Opponent pools are intentionally not used in this implementation.</p>
+      <p class="note">Self-play opponent is the frozen previous generation. Opponent pools are intentionally not used in this implementation. Hidden-layer changes apply after clicking Initialize.</p>
     </section>
 
     <section class="panel results">
@@ -83,6 +90,6 @@
     </section>
   </main>
 
-  <script src="app-v2.js"></script>
+  <script src="app-v3.js"></script>
 </body>
 </html>
