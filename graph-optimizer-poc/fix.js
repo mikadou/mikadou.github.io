@@ -1,64 +1,112 @@
 'use strict';
 
 // Corrective patch for the first POC implementation.
-// The teacher demonstrates a one-pass constructive algorithm, so training and
-// inference now use the same one-visit-per-node, one-reserved-value action space.
+// The learned optimizer may revisit nodes, reuse values, make mistakes, and
+// correct them later. Only exact no-op assignments are masked.
 
 const POC_NEGATIVE_MASK = -1e9;
 
-function pocActionMask(problem, visited, reservedValues) {
+currentValueMask = function maskOnlyExactNoOps(problem, values) {
   const mask = new Float32Array(problem.n * problem.domainSize);
   for (let node = 0; node < problem.n; node++) {
-    for (let value = 0; value < problem.domainSize; value++) {
-      if (visited[node] || reservedValues.has(value)) {
-        mask[node * problem.domainSize + value] = POC_NEGATIVE_MASK;
+    mask[node * problem.domainSize + values[node]] = POC_NEGATIVE_MASK;
+  }
+  return mask;
+};
+
+function pocWrongValue(problem, targetValue, rng) {
+  let value = rng.int(problem.domainSize);
+  if (value === targetValue) value = (value + 1) % problem.domainSize;
+  return value;
+}
+
+function pocCorrectionExamples(problem) {
+  const rng = new SeededRandom(problem.seed ^ 0xC0FFEE);
+  const values = problem.initialValues.slice();
+  const examples = [];
+  let perturbationsRemaining = Math.max(1, Math.ceil(problem.n / 3));
+  const maxExamples = problem.n * 2 + perturbationsRemaining;
+  let guard = 0;
+
+  while (examples.length < maxExamples && guard < maxExamples * 5) {
+    guard++;
+    const incorrectDepths = [];
+    for (let depth = 0; depth < problem.n; depth++) {
+      const storageIndex = problem.indexById.get(problem.chain[depth]);
+      if (values[storageIndex] !== targetValueAtDepth(problem, depth)) {
+        incorrectDepths.push(depth);
+      }
+    }
+
+    if (incorrectDepths.length === 0) {
+      if (perturbationsRemaining === 0) break;
+      const depth = rng.int(problem.n);
+      const storageIndex = problem.indexById.get(problem.chain[depth]);
+      const targetValue = targetValueAtDepth(problem, depth);
+      values[storageIndex] = pocWrongValue(problem, targetValue, rng);
+      perturbationsRemaining--;
+      continue;
+    }
+
+    // Usually repair the first incorrect node along the chain, but sometimes
+    // repair another incorrect node so the policy does not depend on one rigid
+    // traversal order.
+    const chosenDepth = rng.next() < 0.25
+      ? incorrectDepths[rng.int(incorrectDepths.length)]
+      : incorrectDepths[0];
+    const storageIndex = problem.indexById.get(problem.chain[chosenDepth]);
+    const targetValue = targetValueAtDepth(problem, chosenDepth);
+    examples.push({ values: values.slice(), action: storageIndex * problem.domainSize + targetValue });
+    values[storageIndex] = targetValue;
+
+    // Corrupt an already-correct node occasionally. The next teacher actions
+    // demonstrate revisiting and repairing previously assigned variables.
+    if (perturbationsRemaining > 0 && examples.length > 1 && rng.next() < 0.35) {
+      const correctDepths = [];
+      for (let depth = 0; depth < problem.n; depth++) {
+        const index = problem.indexById.get(problem.chain[depth]);
+        if (values[index] === targetValueAtDepth(problem, depth)) correctDepths.push(depth);
+      }
+      if (correctDepths.length > 0) {
+        const depth = correctDepths[rng.int(correctDepths.length)];
+        const index = problem.indexById.get(problem.chain[depth]);
+        const target = targetValueAtDepth(problem, depth);
+        values[index] = pocWrongValue(problem, target, rng);
+        perturbationsRemaining--;
       }
     }
   }
-  return mask;
+
+  return examples;
 }
 
-// No-op assignments are valid teacher actions. The old mask made an already
-// correct teacher target impossible to learn.
-currentValueMask = function currentValueMaskWithoutNoOpBan(problem) {
-  return new Float32Array(problem.n * problem.domainSize);
-};
-
-RecurrentGraphPolicy.prototype.trainEpisode = function trainConstructiveEpisode(problem, optimizer) {
-  const values = problem.initialValues.slice();
-  const visited = new Uint8Array(problem.n);
-  const reservedValues = new Set();
+RecurrentGraphPolicy.prototype.trainEpisode = function trainCorrectionEpisode(problem, optimizer) {
+  const examples = pocCorrectionExamples(problem);
+  if (examples.length === 0) return 0;
 
   const result = tf.tidy(() => tf.variableGrads(() => {
     let hidden = tf.zeros([problem.n, HIDDEN_DIM]);
     let totalLoss = tf.scalar(0);
+    const maxSteps = Math.max(problem.n * 2, examples.length);
 
-    for (let depth = 0; depth < problem.n; depth++) {
-      const storageIndex = problem.indexById.get(problem.chain[depth]);
-      const targetValue = targetValueAtDepth(problem, depth);
-      const targetAction = storageIndex * problem.domainSize + targetValue;
-      const output = this.forward(problem, values, hidden, depth, problem.n);
+    for (let step = 0; step < examples.length; step++) {
+      const example = examples[step];
+      const output = this.forward(problem, example.values, hidden, step, maxSteps);
       hidden = output.hidden;
 
-      const maskedLogits = output.logits.add(tf.tensor1d(
-        pocActionMask(problem, visited, reservedValues)
-      ));
-      const actionMatrix = maskedLogits.reshape([problem.n, problem.domainSize]);
+      const storageIndex = Math.floor(example.action / problem.domainSize);
+      const targetValue = example.action % problem.domainSize;
+      const actionMatrix = output.logits.reshape([problem.n, problem.domainSize]);
       const nodeLogits = tf.logSumExp(actionMatrix, 1);
-      const selectedValueLogits = actionMatrix.gather([storageIndex])
-        .reshape([problem.domainSize]);
+      const selectedValueLogits = actionMatrix.gather([storageIndex]).reshape([problem.domainSize]);
 
-      const jointNll = tf.logSoftmax(maskedLogits).gather([targetAction]).squeeze().neg();
+      const jointNll = tf.logSoftmax(output.logits).gather([example.action]).squeeze().neg();
       const nodeNll = tf.logSoftmax(nodeLogits).gather([storageIndex]).squeeze().neg();
       const valueNll = tf.logSoftmax(selectedValueLogits).gather([targetValue]).squeeze().neg();
       totalLoss = totalLoss.add(jointNll).add(nodeNll.mul(0.5)).add(valueNll.mul(0.5));
-
-      values[storageIndex] = targetValue;
-      visited[storageIndex] = 1;
-      reservedValues.add(targetValue);
     }
 
-    return totalLoss.div(problem.n * 2);
+    return totalLoss.div(examples.length * 2);
   }, this.vars));
 
   const lossValue = result.value.dataSync()[0];
@@ -73,29 +121,20 @@ RecurrentGraphPolicy.prototype.trainEpisode = function trainConstructiveEpisode(
   return lossValue;
 };
 
-runLearnedPolicy = async function runConstructiveLearnedPolicy(problem, requestedMaxSteps) {
+runLearnedPolicy = async function runRevisableLearnedPolicy(problem, maxSteps) {
   const values = problem.initialValues.slice();
   let currentEnergy = energy(problem, values);
+  let bestEnergy = currentEnergy;
+  let bestValues = values.slice();
   const history = [currentEnergy];
-  const visited = new Uint8Array(problem.n);
-  const reservedValues = new Set();
   let hidden = tf.zeros([problem.n, HIDDEN_DIM]);
   let lastNodeId = null;
   let steps = 0;
-  const maxSteps = Math.min(problem.n, requestedMaxSteps);
   const started = performance.now();
 
   for (let step = 0; step < maxSteps && currentEnergy > 0; step++) {
     if (state.stopRequested) break;
-    const mask = pocActionMask(problem, visited, reservedValues);
-    const output = tf.tidy(() => {
-      const base = state.policy.forward(problem, values, hidden, step, maxSteps);
-      return {
-        hidden: base.hidden,
-        logits: base.logits.add(tf.tensor1d(mask))
-      };
-    });
-
+    const output = tf.tidy(() => state.policy.forward(problem, values, hidden, step, maxSteps));
     const logitsData = output.logits.dataSync();
     let actionIndex = 0;
     let bestLogit = Number.NEGATIVE_INFINITY;
@@ -111,54 +150,56 @@ runLearnedPolicy = async function runConstructiveLearnedPolicy(problem, requeste
     output.logits.dispose();
 
     const action = applyAction(problem, values, actionIndex);
-    visited[action.storageIndex] = 1;
-    reservedValues.add(action.value);
     lastNodeId = action.nodeId;
     steps++;
     currentEnergy = energy(problem, values);
+    if (currentEnergy < bestEnergy) {
+      bestEnergy = currentEnergy;
+      bestValues = values.slice();
+    }
+    // Plot the actual current energy so temporary mistakes and later repairs
+    // remain visible instead of being hidden by a best-so-far curve.
     history.push(currentEnergy);
   }
 
   const hiddenNorms = hiddenNormsFromTensor(hidden, problem.n);
   hidden.dispose();
   return {
-    values,
-    energy: currentEnergy,
+    values: bestValues,
+    energy: bestEnergy,
     steps,
     runtimeMs: performance.now() - started,
-    success: currentEnergy === 0,
+    success: bestEnergy === 0,
     history,
     hiddenNorms,
     lastNodeId,
-    distinctValues: new Set(values).size
+    distinctValues: new Set(bestValues).size
   };
 };
 
-// Make the budget explicit. The learned policy is now a single constructive
-// pass, while SA keeps its much larger proposal budget.
 const policyBudgetLabel = ui.policyBudgetMultiplier.closest('label');
 if (policyBudgetLabel) {
   const firstTextNode = Array.from(policyBudgetLabel.childNodes)
     .find(node => node.nodeType === Node.TEXT_NODE);
   if (firstTextNode) firstTextNode.textContent = 'Policy action budget ';
   const help = policyBudgetLabel.querySelector('small');
-  if (help) help.textContent = 'Exactly 1 × N: each node can be selected once';
+  if (help) help.textContent = 'Configurable multiplier × N; revisits and corrections are allowed';
 }
-ui.policyBudgetMultiplier.value = '1';
+ui.policyBudgetMultiplier.value = '6';
 ui.policyBudgetMultiplier.min = '1';
-ui.policyBudgetMultiplier.max = '1';
-ui.policyBudgetMultiplier.disabled = true;
+ui.policyBudgetMultiplier.max = '12';
+ui.policyBudgetMultiplier.disabled = false;
 
 if (ui.trainEpisodes.value === '800') ui.trainEpisodes.value = '1600';
 if (ui.trainMaxN.value === '12') ui.trainMaxN.value = '16';
 
 const policyCaption = ui.policyGraph.closest('.result-panel')?.querySelector('.caption');
 if (policyCaption) {
-  policyCaption.textContent = 'Each node is visited at most once; selected values are reserved, so the learned pass cannot assign the same chosen value to several nodes.';
+  policyCaption.textContent = 'Nodes may be revisited and values may be reused. The policy can make an early mistake and revise it during later optimization steps.';
 }
 
 const trainingBlock = Array.from(document.querySelectorAll('.explain-grid > div'))
   .find(block => block.querySelector('h3')?.textContent === 'Training signal');
 if (trainingBlock) {
-  trainingBlock.querySelector('p').innerHTML = 'The teacher always performs one complete head-to-tail pass and assigns <code>2N − 1 − depth</code>. Training uses joint, node-selection, and value-selection losses under the same masks used at inference.';
+  trainingBlock.querySelector('p').innerHTML = 'The teacher repairs incorrect variables toward <code>2N − 1 − depth</code>. Training also injects corrupted previously-correct nodes, so later steps demonstrate revisiting and correcting earlier assignments. Inference masks only exact no-op assignments.';
 }
