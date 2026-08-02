@@ -125,6 +125,7 @@ runNeuralAnnealing = async function runUniformInitializedNeuralAnnealing(
   let bestEnergy = currentEnergy;
   let bestValues = values.slice();
   const history = [currentEnergy];
+  const actionHistory = [];
   let hidden = tf.zeros([problem.n, HIDDEN_DIM]);
   let lastNodeId = null;
   let lastAccepted = true;
@@ -153,6 +154,7 @@ runNeuralAnnealing = async function runUniformInitializedNeuralAnnealing(
     hidden = output.hidden;
     output.logits.dispose();
 
+    actionHistory.push(actionIndex);
     const action = decodeAction(problem, actionIndex);
     const oldValue = values[action.storageIndex];
     values[action.storageIndex] = action.value;
@@ -192,6 +194,7 @@ runNeuralAnnealing = async function runUniformInitializedNeuralAnnealing(
     runtimeMs: performance.now() - started,
     success: bestEnergy === 0,
     history,
+    actionHistory,
     hiddenNorms,
     lastNodeId
   };
@@ -212,6 +215,7 @@ runRandomAnnealing = function runSharedUniformAnnealing(
   let bestEnergy = currentEnergy;
   let bestValues = values.slice();
   const history = [currentEnergy];
+  const actionHistory = [];
   let lastNodeId = null;
   let acceptedCount = 0;
   let steps = 0;
@@ -221,6 +225,7 @@ runRandomAnnealing = function runSharedUniformAnnealing(
     if (state.stopRequested) break;
 
     const actionIndex = sampleUniformMutationAction(problem, values, proposalRng);
+    actionHistory.push(actionIndex);
     const action = decodeAction(problem, actionIndex);
     const oldValue = values[action.storageIndex];
     values[action.storageIndex] = action.value;
@@ -255,6 +260,7 @@ runRandomAnnealing = function runSharedUniformAnnealing(
     runtimeMs: performance.now() - started,
     success: bestEnergy === 0,
     history,
+    actionHistory,
     lastNodeId
   };
   uniformLastRandomResult = result;
@@ -283,6 +289,7 @@ runComparison = async function runComparisonWithoutTrainingRequirement() {
 
   if (wasUntrained && uniformLastNeuralResult && uniformLastRandomResult) {
     const identical =
+      arraysEqual(uniformLastNeuralResult.actionHistory, uniformLastRandomResult.actionHistory) &&
       arraysEqual(uniformLastNeuralResult.history, uniformLastRandomResult.history) &&
       arraysEqual(uniformLastNeuralResult.values, uniformLastRandomResult.values) &&
       uniformLastNeuralResult.accepted === uniformLastRandomResult.accepted &&
