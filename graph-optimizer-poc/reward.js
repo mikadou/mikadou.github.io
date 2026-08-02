@@ -1,9 +1,7 @@
 'use strict';
 
-// Reward-only training override. This replaces the legacy supervised
-// RecurrentGraphPolicy.trainEpisode method before the user can start training.
-// No target assignment, node depth, constructive solution, or teacher action is
-// used by this training path.
+// Reward-only REINFORCE training. No target assignment, node depth,
+// constructive solution, or teacher action is supplied.
 
 const RL_DISCOUNT = 0.97;
 const RL_ENTROPY_COEF = 0.01;
@@ -11,15 +9,6 @@ const RL_STEP_COST = 0.01;
 const RL_SUCCESS_BONUS = 3.0;
 const RL_TERMINAL_PENALTY = 0.25;
 const RL_BASELINE_RATE = 0.05;
-
-const rlTrainBudgetInput = document.getElementById('trainBudgetMultiplier');
-
-function rlPositiveInt(input, fallback) {
-  const parsed = Number.parseInt(input?.value, 10);
-  const value = Math.max(1, Number.isFinite(parsed) ? parsed : fallback);
-  if (input) input.value = String(value);
-  return value;
-}
 
 function rlTemperature() {
   const progress = Math.min(1, state.trainedEpisodes / 3000);
@@ -41,7 +30,7 @@ function rlDiscountedReturns(rewards) {
 }
 
 RecurrentGraphPolicy.prototype.trainEpisode = function trainRewardEpisode(problem, optimizer) {
-  const maxSteps = rlPositiveInt(rlTrainBudgetInput, 4) * problem.n;
+  const maxSteps = readPositiveInt(ui.trainBudgetMultiplier, 4) * problem.n;
   const temperature = rlTemperature();
   const values = problem.initialValues.slice();
   const valueStates = [];
@@ -151,18 +140,3 @@ RecurrentGraphPolicy.prototype.trainEpisode = function trainRewardEpisode(proble
 
   return lossValue;
 };
-
-if (ui.trainEpisodes.value === '800') ui.trainEpisodes.value = '2000';
-if (ui.trainMaxN.value === '12') ui.trainMaxN.value = '8';
-ui.trainBtn.textContent = 'Train from rewards';
-
-const policyCaption = ui.policyGraph.closest('.result-panel')?.querySelector('.caption');
-if (policyCaption) {
-  policyCaption.textContent = 'Nodes may be revisited and values may be reused. The policy can make mistakes and correct them later.';
-}
-
-const trainingBlock = Array.from(document.querySelectorAll('.explain-grid > div'))
-  .find(block => block.querySelector('h3')?.textContent === 'Reward-only learning');
-if (trainingBlock) {
-  trainingBlock.querySelector('p').innerHTML = 'REINFORCE uses discounted returns and an entropy bonus. Reward comes only from violation-energy change, a small action cost, a feasibility bonus, and a terminal penalty for remaining violations. No target assignment or constructive rule is supplied.';
-}
