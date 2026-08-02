@@ -1,6 +1,6 @@
 'use strict';
 
-const FEATURE_DIM = 9;
+const FEATURE_DIM = 12;
 const HIDDEN_DIM = 32;
 const MESSAGE_PASSES = 2;
 const ACTION_DIM = 48;
@@ -13,8 +13,7 @@ const ui = {
   trainMinN: document.getElementById('trainMinN'),
   trainMaxN: document.getElementById('trainMaxN'),
   trainBudgetMultiplier: document.getElementById('trainBudgetMultiplier'),
-  policyBudgetMultiplier: document.getElementById('policyBudgetMultiplier'),
-  saBudgetMultiplier: document.getElementById('saBudgetMultiplier'),
+  proposalBudgetMultiplier: document.getElementById('proposalBudgetMultiplier'),
   newProblemBtn: document.getElementById('newProblemBtn'),
   trainBtn: document.getElementById('trainBtn'),
   compareBtn: document.getElementById('compareBtn'),
@@ -117,16 +116,40 @@ function energy(problem, values) {
   return total;
 }
 
-function applyAction(problem, values, actionIndex) {
+function decodeAction(problem, actionIndex) {
   const storageIndex = Math.floor(actionIndex / problem.domainSize);
   const value = actionIndex % problem.domainSize;
-  values[storageIndex] = value;
   return { storageIndex, value, nodeId: problem.nodeIds[storageIndex] };
 }
 
-function buildNodeFeatures(problem, values, step, maxSteps) {
+function applyAction(problem, values, actionIndex) {
+  const action = decodeAction(problem, actionIndex);
+  values[action.storageIndex] = action.value;
+  return action;
+}
+
+function annealingTemperature(problem, step, maxSteps) {
+  const initialTemperature = Math.max(1, problem.n / 2);
+  const progress = maxSteps > 1 ? step / (maxSteps - 1) : 1;
+  return initialTemperature * Math.pow(0.001, progress);
+}
+
+function annealingAcceptanceProbability(delta, temperature) {
+  if (delta <= 0) return 1;
+  return Math.exp(-delta / Math.max(1e-6, temperature));
+}
+
+function buildNodeFeatures(problem, values, step, maxSteps, saContext = {}) {
   const features = new Float32Array(problem.n * FEATURE_DIM);
   const denom = Math.max(1, problem.domainMax);
+  const initialTemperature = Math.max(1, problem.n / 2);
+  const temperature = Number.isFinite(saContext.temperature)
+    ? saContext.temperature
+    : annealingTemperature(problem, step, maxSteps);
+  const temperatureRatio = clamp(temperature / initialTemperature, 0, 1);
+  const lastAccepted = saContext.lastAccepted === false ? 0 : 1;
+  const lastDelta = Number.isFinite(saContext.lastDelta) ? saContext.lastDelta : 0;
+  const normalizedLastDelta = clamp(lastDelta / Math.max(1, problem.n), -2, 2);
 
   for (let storageIndex = 0; storageIndex < problem.n; storageIndex++) {
     const id = problem.nodeIds[storageIndex];
@@ -156,6 +179,9 @@ function buildNodeFeatures(problem, values, step, maxSteps) {
     features[offset + 6] = maxSteps > 0 ? step / maxSteps : 0;
     features[offset + 7] = 1 / denom;
     features[offset + 8] = 1;
+    features[offset + 9] = temperatureRatio;
+    features[offset + 10] = lastAccepted;
+    features[offset + 11] = normalizedLastDelta;
   }
   return features;
 }
@@ -196,12 +222,18 @@ class RecurrentGraphPolicy {
     this.bAction2 = this.add(tf.variable(tf.zeros([1]), true, `${this.prefix}_bAction2`));
   }
 
-  add(variable) { this.vars.push(variable); return variable; }
+  add(variable) {
+    this.vars.push(variable);
+    return variable;
+  }
 
-  forward(problem, values, hidden, step, maxSteps) {
+  forward(problem, values, hidden, step, maxSteps, saContext = {}) {
     const n = problem.n;
     const d = problem.domainSize;
-    const features = tf.tensor2d(buildNodeFeatures(problem, values, step, maxSteps), [n, FEATURE_DIM]);
+    const features = tf.tensor2d(
+      buildNodeFeatures(problem, values, step, maxSteps, saContext),
+      [n, FEATURE_DIM]
+    );
     const predAdj = tf.tensor2d(problem.predMatrix, [n, n]);
     const succAdj = tf.tensor2d(problem.succMatrix, [n, n]);
     const projected = tf.tanh(features.matMul(this.wInput).add(this.bInput));
@@ -220,7 +252,8 @@ class RecurrentGraphPolicy {
         .add(succMessage.matMul(this.wCandSucc))
         .add(nextHidden.matMul(this.wCandSelf))
         .add(this.bCand));
-      nextHidden = gate.mul(candidate).add(tf.scalar(1).sub(gate).mul(nextHidden));
+      nextHidden = gate.mul(candidate)
+        .add(tf.scalar(1).sub(gate).mul(nextHidden));
     }
 
     const nodeContext = tf.concat([nextHidden, projected, features], 1);
@@ -233,13 +266,17 @@ class RecurrentGraphPolicy {
       .reshape([n, 1, 1]).tile([1, d, 1]);
     const difference = candidates.sub(currentValues);
     const actionInput = tf.concat(
-      [nodeExpanded, candidates, difference, difference.abs()], 2
+      [nodeExpanded, candidates, difference, difference.abs()],
+      2
     ).reshape([n * d, contextDim + 3]);
     const actionHidden = tf.relu(actionInput.matMul(this.wAction1).add(this.bAction1));
-    let logits = actionHidden.matMul(this.wAction2).add(this.bAction2).reshape([n * d]);
+    let logits = actionHidden.matMul(this.wAction2).add(this.bAction2)
+      .reshape([n * d]);
     logits = logits.add(tf.tensor1d(currentValueMask(problem, values)));
     return { hidden: nextHidden, logits };
   }
 
-  dispose() { this.vars.forEach(variable => variable.dispose()); }
+  dispose() {
+    this.vars.forEach(variable => variable.dispose());
+  }
 }
