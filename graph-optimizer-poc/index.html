@@ -50,9 +50,9 @@
 
       <div class="progress-wrap" aria-live="polite">
         <div class="progress-track"><div id="progressBar" class="progress-bar"></div></div>
-        <p id="statusText">Create a problem, then train the neural mutation proposer.</p>
+        <p id="statusText">Compare immediately to verify uniform initialization, or train the neural proposer.</p>
       </div>
-      <p class="caption">Training keeps simulated annealing fixed. Policy gradients change only the mutation proposal distribution.</p>
+      <p class="caption">At reset, the neural action projection is zero, so all legal mutations are uniform. With the same random streams, an untrained neural run exactly matches random-mutation SA.</p>
     </section>
 
     <section class="panel" aria-labelledby="problem-title">
@@ -74,7 +74,7 @@
       <article class="panel result-panel">
         <div class="section-heading compact">
           <div><p class="kicker">Learned proposals</p><h2>SA + neural mutation</h2></div>
-          <span id="policyStateBadge" class="badge muted">Untrained proposer</span>
+          <span id="policyStateBadge" class="badge muted">Uniform init</span>
         </div>
         <div id="policyGraph" class="chain mini"></div>
         <div class="metrics" id="policyMetrics">
@@ -83,7 +83,7 @@
           <div><span>Runtime</span><strong>–</strong></div>
           <div><span>Success</span><strong>–</strong></div>
         </div>
-        <p class="caption">The graph network proposes mutations; the standard SA rule decides whether each proposal is accepted.</p>
+        <p class="caption">Before training, this proposer is exactly uniform. After training, the graph network biases mutation probabilities while SA still accepts or rejects every proposal.</p>
       </article>
 
       <article class="panel result-panel">
@@ -98,7 +98,7 @@
           <div><span>Runtime</span><strong>–</strong></div>
           <div><span>Success</span><strong>–</strong></div>
         </div>
-        <p class="caption">The baseline chooses a uniformly random variable and a uniformly random replacement value.</p>
+        <p class="caption">The baseline samples uniformly from every legal variable-and-replacement-value mutation.</p>
       </article>
     </section>
 
@@ -113,16 +113,16 @@
 
     <section class="panel" aria-labelledby="benchmark-title">
       <div class="section-heading compact"><div><p class="kicker">Batch evaluation</p><h2 id="benchmark-title">Benchmark summary</h2></div></div>
-      <div id="benchmarkSummary" class="benchmark-empty">Run a 30-instance benchmark after training the neural mutation proposer.</div>
+      <div id="benchmarkSummary" class="benchmark-empty">Benchmark immediately to verify untrained parity, or train the neural mutation proposer first.</div>
     </section>
 
     <section class="panel explainer" aria-labelledby="architecture-title">
       <div class="section-heading compact"><div><p class="kicker">What is controlled</p><h2 id="architecture-title">Fair proposal comparison</h2></div></div>
       <div class="explain-grid">
         <div><h3>Shared annealing loop</h3><p>Both methods use the same temperature schedule and Metropolis acceptance probability. Neither model can bypass rejected moves.</p></div>
-        <div><h3>Neural proposer</h3><p>A recurrent graph network scores every <code>(node, value)</code> mutation. Persistent per-node state receives temperature, previous acceptance, and previous energy delta.</p></div>
+        <div><h3>Uniform initialization</h3><p>The neural output projection starts at zero. All legal mutations therefore have equal probability, and a shared sampler makes the untrained trajectory identical to random SA for the same seed.</p></div>
         <div><h3>Training signal</h3><p>REINFORCE rewards accepted energy reductions and improvements to the best solution, with a success bonus and small costs for proposals and rejections. No target assignment is supplied.</p></div>
-        <div><h3>Evaluation</h3><p>Both variants start from the same assignment and receive the same number of proposals. The experiment therefore measures mutation quality rather than replacing simulated annealing.</p></div>
+        <div><h3>Evaluation</h3><p>Both variants start from the same assignment and receive the same proposals and acceptance thresholds before training. After training, only the neural proposal probabilities differ.</p></div>
       </div>
     </section>
 
@@ -131,5 +131,6 @@
   <script src="core.js"></script>
   <script src="reward.js"></script>
   <script src="runtime.js"></script>
+  <script src="uniform-init.js"></script>
 </body>
 </html>
