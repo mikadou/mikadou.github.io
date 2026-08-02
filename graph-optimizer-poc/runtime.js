@@ -8,12 +8,12 @@ function resetModel() {
   state.policy = new RecurrentGraphPolicy();
   state.optimizer = tf.train.adam(DEFAULT_LEARNING_RATE);
   state.trainedEpisodes = 0;
-  ui.policyStateBadge.textContent = 'Untrained';
+  ui.policyStateBadge.textContent = 'Untrained proposer';
   ui.policyStateBadge.classList.add('muted');
   ui.compareBtn.disabled = true;
   ui.benchmarkBtn.disabled = true;
   ui.progressBar.style.width = '0%';
-  ui.statusText.textContent = 'Model reset. Reward-only training starts from scratch.';
+  ui.statusText.textContent = 'Model reset. Neural mutation training starts from scratch.';
   clearResults();
 }
 
@@ -23,7 +23,7 @@ function createCurrentProblem() {
   state.currentProblem = makeProblem(n);
   renderProblem(state.currentProblem);
   clearResults();
-  setStatus(`New N=${n} problem created. Hidden state resets to zero for each optimizer run.`);
+  setStatus(`New N=${n} problem created. Both SA variants start from this assignment.`);
 }
 
 function renderProblem(problem) {
@@ -83,7 +83,7 @@ function renderChain(container, problem, values, hiddenNorms = null, recentNodeI
   }
 }
 
-function updateMetrics(container, data, actionLabel) {
+function updateMetrics(container, data) {
   const items = container.querySelectorAll('div');
   const values = [
     data.energy,
@@ -91,7 +91,6 @@ function updateMetrics(container, data, actionLabel) {
     `${data.runtimeMs.toFixed(1)} ms`,
     data.success ? 'Yes' : 'No'
   ];
-  items[1].querySelector('span').textContent = actionLabel;
   items.forEach((item, index) => {
     item.querySelector('strong').textContent = String(values[index]);
   });
@@ -101,17 +100,15 @@ function clearResults() {
   if (!state.currentProblem) return;
   renderChain(ui.policyGraph, state.currentProblem, state.currentProblem.initialValues);
   renderChain(ui.saGraph, state.currentProblem, state.currentProblem.initialValues);
-  resetMetricPanel(ui.policyMetrics, 'Actions');
-  resetMetricPanel(ui.saMetrics, 'Proposals');
+  resetMetricPanel(ui.policyMetrics);
+  resetMetricPanel(ui.saMetrics);
   drawEnergyChart([], []);
   ui.benchmarkSummary.className = 'benchmark-empty';
-  ui.benchmarkSummary.textContent = 'Run a 30-instance benchmark after reward training.';
+  ui.benchmarkSummary.textContent = 'Run a 30-instance benchmark after training the neural mutation proposer.';
 }
 
-function resetMetricPanel(container, actionLabel) {
-  const labels = ['Energy', actionLabel, 'Runtime', 'Success'];
-  container.querySelectorAll('div').forEach((item, index) => {
-    item.querySelector('span').textContent = labels[index];
+function resetMetricPanel(container) {
+  container.querySelectorAll('div').forEach(item => {
     item.querySelector('strong').textContent = '–';
   });
 }
@@ -130,8 +127,10 @@ function hiddenNormsFromTensor(hiddenTensor, n) {
   return norms;
 }
 
-async function runLearnedPolicy(problem, requestedMaxSteps) {
+async function runNeuralAnnealing(problem, requestedMaxSteps, seed = problem.seed) {
   const maxSteps = Math.max(1, Math.floor(requestedMaxSteps));
+  const proposalRng = new SeededRandom(seed ^ 0x13579BDF);
+  const acceptanceRng = new SeededRandom(seed ^ 0x2468ACE0);
   const values = problem.initialValues.slice();
   let currentEnergy = energy(problem, values);
   let bestEnergy = currentEnergy;
@@ -139,40 +138,53 @@ async function runLearnedPolicy(problem, requestedMaxSteps) {
   const history = [currentEnergy];
   let hidden = tf.zeros([problem.n, HIDDEN_DIM]);
   let lastNodeId = null;
+  let lastAccepted = true;
+  let lastDelta = 0;
+  let acceptedCount = 0;
   let steps = 0;
   const started = performance.now();
 
-  for (let step = 0; step < maxSteps && currentEnergy > 0; step++) {
+  for (let step = 0; step < maxSteps && bestEnergy > 0; step++) {
     if (state.stopRequested) break;
 
+    const temperature = annealingTemperature(problem, step, maxSteps);
+    const context = { temperature, lastAccepted, lastDelta };
     const output = tf.tidy(() =>
-      state.policy.forward(problem, values, hidden, step, maxSteps)
+      state.policy.forward(problem, values, hidden, step, maxSteps, context)
     );
-    const logitsData = output.logits.dataSync();
-    let actionIndex = 0;
-    let bestLogit = Number.NEGATIVE_INFINITY;
-
-    for (let index = 0; index < logitsData.length; index++) {
-      if (logitsData[index] > bestLogit) {
-        bestLogit = logitsData[index];
-        actionIndex = index;
-      }
-    }
+    const actionIndex = samplePolicyAction(
+      output.logits,
+      EVAL_PROPOSAL_TEMPERATURE,
+      proposalRng.int(0x7fffffff)
+    );
 
     hidden.dispose();
     hidden = output.hidden;
     output.logits.dispose();
 
-    const action = applyAction(problem, values, actionIndex);
-    lastNodeId = action.nodeId;
-    steps++;
-    currentEnergy = energy(problem, values);
+    const action = decodeAction(problem, actionIndex);
+    const oldValue = values[action.storageIndex];
+    values[action.storageIndex] = action.value;
+    const candidateEnergy = energy(problem, values);
+    const delta = candidateEnergy - currentEnergy;
+    const acceptanceProbability = annealingAcceptanceProbability(delta, temperature);
+    const accepted = acceptanceRng.next() < acceptanceProbability;
 
-    if (currentEnergy < bestEnergy) {
-      bestEnergy = currentEnergy;
-      bestValues = values.slice();
+    if (accepted) {
+      currentEnergy = candidateEnergy;
+      acceptedCount++;
+      lastNodeId = action.nodeId;
+      if (currentEnergy < bestEnergy) {
+        bestEnergy = currentEnergy;
+        bestValues = values.slice();
+      }
+    } else {
+      values[action.storageIndex] = oldValue;
     }
 
+    lastAccepted = accepted;
+    lastDelta = delta;
+    steps++;
     history.push(currentEnergy);
     if (steps % 20 === 0) await tf.nextFrame();
   }
@@ -184,6 +196,8 @@ async function runLearnedPolicy(problem, requestedMaxSteps) {
     values: bestValues,
     energy: bestEnergy,
     steps,
+    accepted: acceptedCount,
+    acceptanceRate: steps ? acceptedCount / steps : 0,
     runtimeMs: performance.now() - started,
     success: bestEnergy === 0,
     history,
@@ -192,37 +206,42 @@ async function runLearnedPolicy(problem, requestedMaxSteps) {
   };
 }
 
-function runSimulatedAnnealing(problem, maxSteps, seed = problem.seed ^ 0xA5A5A5A5) {
-  const rng = new SeededRandom(seed);
+function runRandomAnnealing(problem, requestedMaxSteps, seed = problem.seed) {
+  const maxSteps = Math.max(1, Math.floor(requestedMaxSteps));
+  const proposalRng = new SeededRandom(seed ^ 0x13579BDF);
+  const acceptanceRng = new SeededRandom(seed ^ 0x2468ACE0);
   const values = problem.initialValues.slice();
   let currentEnergy = energy(problem, values);
   let bestEnergy = currentEnergy;
   let bestValues = values.slice();
   const history = [currentEnergy];
-  const initialTemperature = Math.max(1, problem.n / 2);
-  let steps = 0;
   let lastNodeId = null;
+  let acceptedCount = 0;
+  let steps = 0;
   const started = performance.now();
 
-  for (let step = 0; step < maxSteps && currentEnergy > 0; step++) {
+  for (let step = 0; step < maxSteps && bestEnergy > 0; step++) {
     if (state.stopRequested) break;
-    const storageIndex = rng.int(problem.n);
-    let candidateValue = rng.int(problem.domainSize);
+
+    const storageIndex = proposalRng.int(problem.n);
+    let candidateValue = proposalRng.int(problem.domainSize);
     if (candidateValue === values[storageIndex]) {
-      candidateValue = (candidateValue + 1 + rng.int(problem.domainSize - 1)) % problem.domainSize;
+      candidateValue =
+        (candidateValue + 1 + proposalRng.int(problem.domainSize - 1)) %
+        problem.domainSize;
     }
 
     const oldValue = values[storageIndex];
     values[storageIndex] = candidateValue;
     const candidateEnergy = energy(problem, values);
     const delta = candidateEnergy - currentEnergy;
-    const progress = maxSteps > 1 ? step / (maxSteps - 1) : 1;
-    const temperature = initialTemperature * Math.pow(0.001, progress);
-    const accept = delta <= 0 ||
-      rng.next() < Math.exp(-delta / Math.max(1e-6, temperature));
+    const temperature = annealingTemperature(problem, step, maxSteps);
+    const acceptanceProbability = annealingAcceptanceProbability(delta, temperature);
+    const accepted = acceptanceRng.next() < acceptanceProbability;
 
-    if (accept) {
+    if (accepted) {
       currentEnergy = candidateEnergy;
+      acceptedCount++;
       lastNodeId = problem.nodeIds[storageIndex];
       if (currentEnergy < bestEnergy) {
         bestEnergy = currentEnergy;
@@ -240,6 +259,8 @@ function runSimulatedAnnealing(problem, maxSteps, seed = problem.seed ^ 0xA5A5A5
     values: bestValues,
     energy: bestEnergy,
     steps,
+    accepted: acceptedCount,
+    acceptanceRate: steps ? acceptedCount / steps : 0,
     runtimeMs: performance.now() - started,
     success: bestEnergy === 0,
     history,
@@ -253,7 +274,7 @@ async function trainPolicy() {
   const episodes = clamp(readInt(ui.trainEpisodes, 2000), 50, 10000);
   let minN = clamp(readInt(ui.trainMinN, 4), 3, 32);
   let maxN = clamp(readInt(ui.trainMaxN, 8), 4, 40);
-  readPositiveInt(ui.trainBudgetMultiplier, 4);
+  readPositiveInt(ui.trainBudgetMultiplier, 8);
 
   if (minN > maxN) [minN, maxN] = [maxN, minN];
   ui.trainMinN.value = String(minN);
@@ -264,6 +285,7 @@ async function trainPolicy() {
   let movingLoss = null;
   let movingReturn = null;
   let movingFinalEnergy = null;
+  let movingAcceptance = null;
   let recentSuccesses = [];
 
   try {
@@ -280,6 +302,9 @@ async function trainPolicy() {
       movingFinalEnergy = movingFinalEnergy === null
         ? stats.finalEnergy
         : movingFinalEnergy * 0.95 + stats.finalEnergy * 0.05;
+      movingAcceptance = movingAcceptance === null
+        ? stats.acceptanceRate
+        : movingAcceptance * 0.95 + stats.acceptanceRate * 0.05;
       recentSuccesses.push(stats.success ? 1 : 0);
       if (recentSuccesses.length > 100) recentSuccesses = recentSuccesses.slice(-100);
 
@@ -289,8 +314,9 @@ async function trainPolicy() {
           Math.max(1, recentSuccesses.length);
         ui.progressBar.style.width = `${(episode / episodes) * 100}%`;
         setStatus(
-          `Reward training ${episode}/${episodes} · loss ${movingLoss.toFixed(3)} · ` +
+          `Neural-SA training ${episode}/${episodes} · loss ${movingLoss.toFixed(3)} · ` +
           `return ${movingReturn.toFixed(2)} · final energy ${movingFinalEnergy.toFixed(2)} · ` +
+          `accepted ${(movingAcceptance * 100).toFixed(0)}% · ` +
           `recent success ${(successRate * 100).toFixed(0)}%`
         );
         await tf.nextFrame();
@@ -298,7 +324,7 @@ async function trainPolicy() {
     }
 
     if (state.trainedEpisodes > 0) {
-      ui.policyStateBadge.textContent = `${state.trainedEpisodes} RL episodes`;
+      ui.policyStateBadge.textContent = `${state.trainedEpisodes} training episodes`;
       ui.policyStateBadge.classList.remove('muted');
       ui.compareBtn.disabled = false;
       ui.benchmarkBtn.disabled = false;
@@ -306,12 +332,12 @@ async function trainPolicy() {
 
     setStatus(
       state.stopRequested
-        ? `Reward training stopped after ${state.trainedEpisodes} total episodes.`
-        : `Reward training complete: ${state.trainedEpisodes} total episodes. Run a paired comparison.`
+        ? `Neural mutation training stopped after ${state.trainedEpisodes} total episodes.`
+        : `Neural mutation training complete: ${state.trainedEpisodes} total episodes.`
     );
   } catch (error) {
     console.error(error);
-    setStatus(`Reward training failed: ${error.message}`, true);
+    setStatus(`Neural mutation training failed: ${error.message}`, true);
   } finally {
     setBusy(false);
     state.stopRequested = false;
@@ -325,28 +351,45 @@ async function runComparison() {
 
   try {
     const n = state.currentProblem.n;
-    const policyBudget = readPositiveInt(ui.policyBudgetMultiplier, 6) * n;
-    const saBudget = readPositiveInt(ui.saBudgetMultiplier, 250) * n;
+    const proposalBudget = readPositiveInt(ui.proposalBudgetMultiplier, 250) * n;
     setStatus(
-      `Running reward-trained policy (${policyBudget} actions) and ` +
-      `SA (${saBudget} proposals) from the same assignment…`
+      `Running neural-mutation SA and random-mutation SA with ${proposalBudget} proposals each…`
     );
 
-    const policyResult = await runLearnedPolicy(state.currentProblem, policyBudget);
+    const neuralResult = await runNeuralAnnealing(
+      state.currentProblem,
+      proposalBudget,
+      state.currentProblem.seed
+    );
     await tf.nextFrame();
-    const saResult = runSimulatedAnnealing(state.currentProblem, saBudget);
+    const randomResult = runRandomAnnealing(
+      state.currentProblem,
+      proposalBudget,
+      state.currentProblem.seed
+    );
 
-    renderChain(ui.policyGraph, state.currentProblem, policyResult.values,
-      policyResult.hiddenNorms, policyResult.lastNodeId);
-    renderChain(ui.saGraph, state.currentProblem, saResult.values,
-      null, saResult.lastNodeId);
-    updateMetrics(ui.policyMetrics, policyResult, 'Actions');
-    updateMetrics(ui.saMetrics, saResult, 'Proposals');
-    drawEnergyChart(policyResult.history, saResult.history);
+    renderChain(
+      ui.policyGraph,
+      state.currentProblem,
+      neuralResult.values,
+      neuralResult.hiddenNorms,
+      neuralResult.lastNodeId
+    );
+    renderChain(
+      ui.saGraph,
+      state.currentProblem,
+      randomResult.values,
+      null,
+      randomResult.lastNodeId
+    );
+    updateMetrics(ui.policyMetrics, neuralResult);
+    updateMetrics(ui.saMetrics, randomResult);
+    drawEnergyChart(neuralResult.history, randomResult.history);
     setStatus(
-      `Comparison complete. Policy: ${policyResult.success ? 'feasible' : 'not feasible'} ` +
-      `in ${policyResult.steps} actions; SA: ${saResult.success ? 'feasible' : 'not feasible'} ` +
-      `in ${saResult.steps} proposals.`
+      `Comparison complete. Neural SA: ${neuralResult.success ? 'feasible' : 'not feasible'}, ` +
+      `${neuralResult.accepted}/${neuralResult.steps} accepted. Random SA: ` +
+      `${randomResult.success ? 'feasible' : 'not feasible'}, ` +
+      `${randomResult.accepted}/${randomResult.steps} accepted.`
     );
   } catch (error) {
     console.error(error);
@@ -373,24 +416,23 @@ async function runBenchmark() {
 
   const count = 30;
   const n = clamp(readInt(ui.testN, 12), 4, 64);
-  const policyBudget = readPositiveInt(ui.policyBudgetMultiplier, 6) * n;
-  const saBudget = readPositiveInt(ui.saBudgetMultiplier, 250) * n;
-  const policyResults = [];
-  const saResults = [];
+  const proposalBudget = readPositiveInt(ui.proposalBudgetMultiplier, 250) * n;
+  const neuralResults = [];
+  const randomResults = [];
 
   try {
     for (let index = 0; index < count; index++) {
       if (state.stopRequested) break;
       const problem = makeProblem(n, 500000 + index * 7919 + state.trainedEpisodes);
-      policyResults.push(await runLearnedPolicy(problem, policyBudget));
-      saResults.push(runSimulatedAnnealing(problem, saBudget, problem.seed ^ 0x55AA55AA));
+      neuralResults.push(await runNeuralAnnealing(problem, proposalBudget, problem.seed));
+      randomResults.push(runRandomAnnealing(problem, proposalBudget, problem.seed));
       ui.progressBar.style.width = `${((index + 1) / count) * 100}%`;
-      setStatus(`Benchmarking ${index + 1}/${count} instances at N=${n}…`);
+      setStatus(`Benchmarking ${index + 1}/${count} paired SA runs at N=${n}…`);
       if ((index + 1) % 3 === 0) await tf.nextFrame();
     }
 
-    renderBenchmark(n, policyResults, saResults, policyBudget, saBudget);
-    setStatus(`Benchmark complete on ${policyResults.length} instances at N=${n}.`);
+    renderBenchmark(n, neuralResults, randomResults, proposalBudget);
+    setStatus(`Benchmark complete on ${neuralResults.length} paired instances at N=${n}.`);
   } catch (error) {
     console.error(error);
     setStatus(`Benchmark failed: ${error.message}`, true);
@@ -400,38 +442,48 @@ async function runBenchmark() {
   }
 }
 
+function median(values) {
+  if (!values.length) return null;
+  const sorted = values.slice().sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2
+    ? sorted[middle]
+    : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
 function summarizeResults(results) {
   const successes = results.filter(result => result.success);
   return {
     successRate: results.length ? successes.length / results.length : 0,
     medianSteps: median(successes.map(result => result.steps)),
     medianRuntime: median(results.map(result => result.runtimeMs)),
-    medianFinalEnergy: median(results.map(result => result.energy))
+    medianFinalEnergy: median(results.map(result => result.energy)),
+    medianAcceptance: median(results.map(result => result.acceptanceRate))
   };
 }
 
-function renderBenchmark(n, policyResults, saResults, policyBudget, saBudget) {
-  const policy = summarizeResults(policyResults);
-  const sa = summarizeResults(saResults);
+function renderBenchmark(n, neuralResults, randomResults, proposalBudget) {
+  const neural = summarizeResults(neuralResults);
+  const random = summarizeResults(randomResults);
   ui.benchmarkSummary.className = '';
   ui.benchmarkSummary.innerHTML = `
     <div class="benchmark-grid">
-      <div class="benchmark-card"><span>Policy success</span><strong>${(policy.successRate * 100).toFixed(0)}%</strong></div>
-      <div class="benchmark-card"><span>SA success</span><strong>${(sa.successRate * 100).toFixed(0)}%</strong></div>
-      <div class="benchmark-card"><span>Policy median actions</span><strong>${policy.medianSteps ?? '–'}</strong></div>
-      <div class="benchmark-card"><span>SA median proposals</span><strong>${sa.medianSteps ?? '–'}</strong></div>
+      <div class="benchmark-card"><span>Neural SA success</span><strong>${(neural.successRate * 100).toFixed(0)}%</strong></div>
+      <div class="benchmark-card"><span>Random SA success</span><strong>${(random.successRate * 100).toFixed(0)}%</strong></div>
+      <div class="benchmark-card"><span>Neural median proposals</span><strong>${neural.medianSteps ?? '–'}</strong></div>
+      <div class="benchmark-card"><span>Random median proposals</span><strong>${random.medianSteps ?? '–'}</strong></div>
     </div>
     <table class="benchmark-table">
-      <thead><tr><th>Method</th><th>Budget</th><th>Success</th><th>Median steps</th><th>Median runtime</th><th>Median final energy</th></tr></thead>
+      <thead><tr><th>Method</th><th>Budget</th><th>Success</th><th>Median proposals</th><th>Acceptance</th><th>Median runtime</th><th>Median final energy</th></tr></thead>
       <tbody>
-        <tr><td>Reward-trained recurrent policy</td><td>${policyBudget}</td><td>${(policy.successRate * 100).toFixed(1)}%</td><td>${policy.medianSteps ?? '–'}</td><td>${policy.medianRuntime?.toFixed(2) ?? '–'} ms</td><td>${policy.medianFinalEnergy ?? '–'}</td></tr>
-        <tr><td>Simulated annealing</td><td>${saBudget}</td><td>${(sa.successRate * 100).toFixed(1)}%</td><td>${sa.medianSteps ?? '–'}</td><td>${sa.medianRuntime?.toFixed(2) ?? '–'} ms</td><td>${sa.medianFinalEnergy ?? '–'}</td></tr>
+        <tr><td>SA + neural mutation</td><td>${proposalBudget}</td><td>${(neural.successRate * 100).toFixed(1)}%</td><td>${neural.medianSteps ?? '–'}</td><td>${neural.medianAcceptance === null ? '–' : `${(neural.medianAcceptance * 100).toFixed(1)}%`}</td><td>${neural.medianRuntime?.toFixed(2) ?? '–'} ms</td><td>${neural.medianFinalEnergy ?? '–'}</td></tr>
+        <tr><td>SA + random mutation</td><td>${proposalBudget}</td><td>${(random.successRate * 100).toFixed(1)}%</td><td>${random.medianSteps ?? '–'}</td><td>${random.medianAcceptance === null ? '–' : `${(random.medianAcceptance * 100).toFixed(1)}%`}</td><td>${random.medianRuntime?.toFixed(2) ?? '–'} ms</td><td>${random.medianFinalEnergy ?? '–'}</td></tr>
       </tbody>
     </table>
-    <p class="caption">${policyResults.length} paired instances, N=${n}. Median step counts use successful runs only.</p>`;
+    <p class="caption">${neuralResults.length} paired instances, N=${n}. Both methods use the same initial assignments, proposal budget, temperature schedule, and SA acceptance rule.</p>`;
 }
 
-function drawEnergyChart(policyHistory, saHistory) {
+function drawEnergyChart(neuralHistory, randomHistory) {
   const canvas = ui.energyChart;
   const ctx = canvas.getContext('2d');
   const width = canvas.width;
@@ -439,8 +491,8 @@ function drawEnergyChart(policyHistory, saHistory) {
   const styles = getComputedStyle(document.documentElement);
   const textColor = styles.getPropertyValue('--muted').trim() || '#677085';
   const gridColor = styles.getPropertyValue('--border').trim() || '#dfe4ef';
-  const policyColor = styles.getPropertyValue('--accent').trim() || '#4f46e5';
-  const saColor = styles.getPropertyValue('--warning').trim() || '#9a6700';
+  const neuralColor = styles.getPropertyValue('--accent').trim() || '#4f46e5';
+  const randomColor = styles.getPropertyValue('--warning').trim() || '#9a6700';
   const pad = { left: 56, right: 18, top: 22, bottom: 42 };
 
   ctx.clearRect(0, 0, width, height);
@@ -449,8 +501,8 @@ function drawEnergyChart(policyHistory, saHistory) {
   ctx.fillStyle = textColor;
   ctx.lineWidth = 1;
 
-  const maxX = Math.max(1, policyHistory.length - 1, saHistory.length - 1);
-  const maxY = Math.max(1, ...policyHistory, ...saHistory);
+  const maxX = Math.max(1, neuralHistory.length - 1, randomHistory.length - 1);
+  const maxY = Math.max(1, ...neuralHistory, ...randomHistory);
   const plotWidth = width - pad.left - pad.right;
   const plotHeight = height - pad.top - pad.bottom;
 
@@ -466,7 +518,7 @@ function drawEnergyChart(policyHistory, saHistory) {
 
   ctx.fillText('0', pad.left - 4, height - 12);
   ctx.fillText(String(maxX), width - pad.right - 28, height - 12);
-  ctx.fillText('Iteration', width / 2 - 24, height - 10);
+  ctx.fillText('Proposal', width / 2 - 24, height - 10);
 
   function plot(history, color) {
     if (history.length < 2) return;
@@ -482,13 +534,13 @@ function drawEnergyChart(policyHistory, saHistory) {
     ctx.stroke();
   }
 
-  plot(saHistory, saColor);
-  plot(policyHistory, policyColor);
+  plot(randomHistory, randomColor);
+  plot(neuralHistory, neuralColor);
 
-  if (!policyHistory.length && !saHistory.length) {
+  if (!neuralHistory.length && !randomHistory.length) {
     ctx.fillStyle = textColor;
     ctx.textAlign = 'center';
-    ctx.fillText('Run a comparison to plot search progress.', width / 2, height / 2);
+    ctx.fillText('Run a comparison to plot SA search progress.', width / 2, height / 2);
     ctx.textAlign = 'start';
   }
 }
@@ -511,7 +563,8 @@ function setBusy(busy) {
 async function initialize() {
   try {
     await tf.ready();
-    ui.backendNotice.textContent = `TensorFlow.js ready · backend: ${tf.getBackend()} · reward-only training`;
+    ui.backendNotice.textContent =
+      `TensorFlow.js ready · backend: ${tf.getBackend()} · shared simulated-annealing loop`;
     resetModel();
     createCurrentProblem();
   } catch (error) {
