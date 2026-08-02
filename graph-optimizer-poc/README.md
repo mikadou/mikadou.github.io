@@ -1,19 +1,21 @@
-# Reward-trained recurrent graph optimizer POC
+# Neural mutation simulated annealing POC
 
-This subfolder contains a browser-only proof of concept comparing:
+This browser-only experiment compares two simulated-annealing optimizers:
 
-1. a recurrent graph policy trained only from optimization rewards; and
-2. simulated annealing with random variable/value proposals.
+1. **SA + neural mutation:** a recurrent graph network proposes the next `(node, value)` mutation.
+2. **SA + random mutation:** the mutation is a uniformly random node and replacement value.
+
+Everything after proposal generation is shared: the initial assignment, proposal budget, temperature schedule, energy function, and Metropolis acceptance rule.
 
 ## Problem
 
-For a chain of `N` shuffled variable nodes, find integer values in `[0, 2N - 1]` satisfying:
+For a shuffled chain of `N` variable nodes, find integer values in `[0, 2N - 1]` satisfying:
 
 ```text
 x(chain[0]) > x(chain[1]) > ... > x(chain[N - 1])
 ```
 
-The violation energy is:
+Violation energy is:
 
 ```text
 sum(max(0, rightValue - leftValue + 1))
@@ -21,57 +23,67 @@ sum(max(0, rightValue - leftValue + 1))
 
 A feasible assignment has energy zero.
 
-## Learned policy
+## Shared simulated annealing
 
-- Variable nodes only; directed adjacency represents `greater than`.
-- Node IDs and internal tensor storage are randomized between episodes.
-- Storage order remains fixed during an episode.
-- Each node has a persistent 32-dimensional hidden state.
-- Hidden state is initialized to zero at the start of every episode.
-- Two directional message-passing rounds run before every assignment.
-- The action head scores every `(node, candidate value)` pair.
-- Nodes may be revisited and candidate values may be reused.
-- Only exact no-op assignments are masked.
-- The same policy is reused until the graph becomes feasible, the user-selected action budget is exhausted, or the user stops the run.
-
-## Reward-only training
-
-The runtime training path does **not** provide target assignments, node depths, a constructive solution, or teacher actions.
-
-During training, actions are sampled from the policy. The per-step reward is based on:
+At proposal step `t`, both methods use:
 
 ```text
-(previous energy - new energy) / N
-- small action cost
-+ success bonus when energy reaches zero
-- terminal penalty for remaining energy when the rollout ends
+T(t) = max(1, N / 2) * 0.001^(t / (budget - 1))
 ```
 
-Training uses REINFORCE with:
+A candidate with energy change `delta` is accepted with probability:
 
-- discounted returns;
-- a moving return baseline;
-- return scaling;
-- an entropy bonus for exploration;
-- gradient clipping;
-- a gradually reduced sampling temperature.
+```text
+1                         when delta <= 0
+exp(-delta / T(t))        otherwise
+```
 
-Persistent node state is replayed through the sampled trajectory when computing gradients, so the model can learn history-dependent behavior across optimization steps.
+The best accepted assignment is retained for reporting.
 
-## Running
+## Neural mutation proposer
 
-Open `index.html` through GitHub Pages or any static web server. TensorFlow.js is loaded from a pinned jsDelivr URL.
+- Variable nodes only; directed edges encode `greater than`.
+- Node IDs and tensor storage are randomized between problem instances.
+- Each node has a persistent 32-dimensional hidden state.
+- Two directional message-passing rounds run before every proposal.
+- The action head scores every `(node, candidate value)` pair.
+- Exact no-op replacements are masked.
+- Input features include the current values and constraint margins, annealing progress, current temperature, whether the previous proposal was accepted, and the previous energy delta.
 
-Reward-only learning is substantially noisier than supervised imitation. A practical starting point is:
+The hidden state persists across proposals in one annealing run and resets between problem instances.
 
-1. train on chain lengths 4–8;
-2. use a rollout budget of `4 × N`;
-3. train for at least 2,000 episodes;
-4. compare first on `N = 8`;
-5. expand the training range only after loss and benchmark energy begin improving.
+## Training
 
-The training rollout, evaluation, and SA budgets are user-controlled in the UI. Large evaluation budgets yield periodically to the browser so the Stop button remains responsive.
+Training uses REINFORCE while the neural proposals pass through the same simulated-annealing acceptance rule used at evaluation.
 
-## Interpretation
+Reward contains:
 
-Success would show that a recurrent graph policy can improve its search behavior from objective feedback alone. It would not prove general-purpose optimization, because the environment is still a very simple monotonic chain and the dense energy signal exposes useful local structure.
+- change in the current accepted energy;
+- extra credit for improving the best energy found;
+- a small proposal cost;
+- a small rejection cost;
+- a feasibility bonus;
+- a terminal penalty for remaining violation energy.
+
+No target assignment, graph depth label, constructive trajectory, or supervised action is supplied. Training changes only the proposal distribution; the annealing schedule and acceptance rule remain fixed.
+
+## Fair comparison
+
+For every paired comparison:
+
+- both methods receive the same initial assignment;
+- both receive the same proposal budget;
+- both use the same temperature schedule;
+- both use the same acceptance rule;
+- separate proposal randomness is used, while acceptance thresholds are seeded identically.
+
+The comparison therefore asks whether the learned mutation distribution is more useful than a uniform random mutation distribution inside simulated annealing.
+
+## Suggested experiment
+
+1. Train on `N = 4..8` for roughly 2,000 episodes.
+2. Use a training rollout budget of `8N` proposals.
+3. Compare both methods with the same `250N` proposal budget at `N = 8` or `12`.
+4. Inspect success rate, median proposals, final energy, acceptance rate, and wall-clock runtime.
+
+The neural version is expected to be slower per proposal because it runs a graph network. Its potential advantage is fewer proposals or a higher success rate at a fixed proposal budget.
