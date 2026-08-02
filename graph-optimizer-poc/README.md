@@ -1,8 +1,8 @@
-# Recurrent graph optimizer POC
+# Reward-trained recurrent graph optimizer POC
 
 This subfolder contains a browser-only proof of concept comparing:
 
-1. a learned recurrent graph policy with persistent hidden state per node; and
+1. a recurrent graph policy trained only from optimization rewards; and
 2. simulated annealing with random variable/value proposals.
 
 ## Problem
@@ -30,25 +30,48 @@ A feasible assignment has energy zero.
 - Hidden state is initialized to zero at the start of every episode.
 - Two directional message-passing rounds run before every assignment.
 - The action head scores every `(node, candidate value)` pair.
-- The policy is reused in a loop until feasible or the step budget is exhausted.
+- Nodes may be revisited and candidate values may be reused.
+- Only exact no-op assignments are masked.
+- The same policy is reused until the graph becomes feasible, the user-selected action budget is exhausted, or the user stops the run.
 
-For stability, the POC uses supervised teacher trajectories. At each step, the teacher finds the first node in chain order whose value differs from:
+## Reward-only training
+
+The runtime training path does **not** provide target assignments, node depths, a constructive solution, or teacher actions.
+
+During training, actions are sampled from the policy. The per-step reward is based on:
 
 ```text
-2N - 1 - depth
+(previous energy - new energy) / N
+- small action cost
++ success bonus when energy reaches zero
+- terminal penalty for remaining energy when the rollout ends
 ```
 
-and assigns that target value. This tests whether the recurrent graph network can learn and generalize the constructive procedure rather than whether policy-gradient training can discover it from sparse reward.
+Training uses REINFORCE with:
+
+- discounted returns;
+- a moving return baseline;
+- return scaling;
+- an entropy bonus for exploration;
+- gradient clipping;
+- a gradually reduced sampling temperature.
+
+Persistent node state is replayed through the sampled trajectory when computing gradients, so the model can learn history-dependent behavior across optimization steps.
 
 ## Running
 
 Open `index.html` through GitHub Pages or any static web server. TensorFlow.js is loaded from a pinned jsDelivr URL.
 
-## Suggested experiment
+Reward-only learning is substantially noisier than supervised imitation. A practical starting point is:
 
-1. Train on chain lengths 4–12 for 800–2,000 episodes.
-2. Compare on `N = 12`.
-3. Test extrapolation on `N = 16`, `24`, or `32`.
-4. Inspect success rate and assignment count versus SA proposal count.
+1. train on chain lengths 4–8;
+2. use a rollout budget of `4 × N`;
+3. train for at least 2,000 episodes;
+4. compare first on `N = 8`;
+5. expand the training range only after loss and benchmark energy begin improving.
 
-For very small chains, SA can remain faster in wall-clock time because a neural forward pass costs more than a simple random proposal. The primary expected advantage is proposal efficiency.
+The training rollout, evaluation, and SA budgets are user-controlled in the UI. Large evaluation budgets yield periodically to the browser so the Stop button remains responsive.
+
+## Interpretation
+
+Success would show that a recurrent graph policy can improve its search behavior from objective feedback alone. It would not prove general-purpose optimization, because the environment is still a very simple monotonic chain and the dense energy signal exposes useful local structure.
