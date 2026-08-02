@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Browser proof of concept: a recurrent graph policy learns to solve strict monotonic chains and is compared with simulated annealing.">
-  <title>Recurrent Graph Optimizer POC</title>
+  <meta name="description" content="Browser proof of concept: a recurrent graph policy learns from optimization rewards to solve strict monotonic chains and is compared with simulated annealing.">
+  <title>Reward-Trained Graph Optimizer POC</title>
   <link rel="stylesheet" href="styles.css">
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
 </head>
@@ -12,11 +12,11 @@
   <main class="page-shell">
     <header class="hero">
       <p class="eyebrow">Learned optimization proof of concept</p>
-      <h1>Recurrent graph policy vs. simulated annealing</h1>
+      <h1>Reward-trained graph policy vs. simulated annealing</h1>
       <p class="lede">
-        A small graph neural policy repeatedly chooses a variable and value for a shuffled strict chain
-        <code>xₐ &gt; xᵦ &gt; …</code>. Each graph node retains hidden state during an episode, while hidden
-        state is reset for every new problem.
+        A recurrent graph policy repeatedly chooses a variable and value for a shuffled strict chain
+        <code>xₐ &gt; xᵦ &gt; …</code>. It receives no target assignments or depth labels: training uses only
+        changes in violation energy, a step cost, a success bonus, and a terminal failure penalty.
       </p>
       <div class="notice" id="backendNotice">Loading TensorFlow.js…</div>
     </header>
@@ -32,16 +32,17 @@
 
       <div class="control-grid">
         <label>Test chain length<input id="testN" type="number" min="4" max="64" value="12"></label>
-        <label>Training episodes<input id="trainEpisodes" type="number" min="50" max="10000" step="50" value="800"></label>
+        <label>RL training episodes<input id="trainEpisodes" type="number" min="50" max="10000" step="100" value="2000"></label>
         <label>Train min N<input id="trainMinN" type="number" min="3" max="32" value="4"></label>
-        <label>Train max N<input id="trainMaxN" type="number" min="4" max="40" value="12"></label>
-        <label>Policy step budget<input id="policyBudgetMultiplier" type="number" min="1" max="12" value="3"><small>Multiplier × N</small></label>
-        <label>SA proposal budget<input id="saBudgetMultiplier" type="number" min="10" max="2000" step="10" value="250"><small>Multiplier × N</small></label>
+        <label>Train max N<input id="trainMaxN" type="number" min="4" max="40" value="8"></label>
+        <label>Training rollout budget<input id="trainBudgetMultiplier" type="number" min="1" value="4"><small>User-selected multiplier × N</small></label>
+        <label>Policy action budget<input id="policyBudgetMultiplier" type="number" min="1" value="6"><small>User-selected multiplier × N</small></label>
+        <label>SA proposal budget<input id="saBudgetMultiplier" type="number" min="1" step="10" value="250"><small>User-selected multiplier × N</small></label>
       </div>
 
       <div class="button-row">
         <button id="newProblemBtn" type="button">New problem</button>
-        <button id="trainBtn" class="primary" type="button">Train policy</button>
+        <button id="trainBtn" class="primary" type="button">Train from rewards</button>
         <button id="compareBtn" type="button" disabled>Run comparison</button>
         <button id="benchmarkBtn" type="button" disabled>Benchmark 30</button>
         <button id="stopBtn" class="danger" type="button" disabled>Stop</button>
@@ -50,8 +51,9 @@
 
       <div class="progress-wrap" aria-live="polite">
         <div class="progress-track"><div id="progressBar" class="progress-bar"></div></div>
-        <p id="statusText">Create a problem, then train the policy.</p>
+        <p id="statusText">Create a problem, then train the policy from rewards.</p>
       </div>
+      <p class="caption">Reward-only policy gradients are noisier than supervised imitation. Start with short chains and increase the training range after learning becomes visible.</p>
     </section>
 
     <section class="panel" aria-labelledby="problem-title">
@@ -82,7 +84,7 @@
           <div><span>Runtime</span><strong>–</strong></div>
           <div><span>Success</span><strong>–</strong></div>
         </div>
-        <p class="caption">Hidden-state bars show the final L2 norm for each node.</p>
+        <p class="caption">Nodes may be revisited and values may be reused. The policy can make mistakes and correct them later.</p>
       </article>
 
       <article class="panel result-panel">
@@ -102,17 +104,17 @@
     </section>
 
     <section class="panel" aria-labelledby="curve-title">
-      <div class="section-heading compact"><div><p class="kicker">One paired run</p><h2 id="curve-title">Violation energy by iteration</h2></div></div>
+      <div class="section-heading compact"><div><p class="kicker">One paired run</p><h2 id="curve-title">Current violation energy by iteration</h2></div></div>
       <canvas id="energyChart" width="1100" height="360" aria-label="Energy history chart"></canvas>
       <div class="legend">
-        <span><i class="legend-line learned"></i> Learned policy actions</span>
+        <span><i class="legend-line learned"></i> Reward-trained policy actions</span>
         <span><i class="legend-line anneal"></i> SA proposals</span>
       </div>
     </section>
 
     <section class="panel" aria-labelledby="benchmark-title">
       <div class="section-heading compact"><div><p class="kicker">Batch evaluation</p><h2 id="benchmark-title">Benchmark summary</h2></div></div>
-      <div id="benchmarkSummary" class="benchmark-empty">Run a 30-instance benchmark after training.</div>
+      <div id="benchmarkSummary" class="benchmark-empty">Run a 30-instance benchmark after reward training.</div>
     </section>
 
     <section class="panel explainer" aria-labelledby="architecture-title">
@@ -120,15 +122,15 @@
       <div class="explain-grid">
         <div><h3>Graph state</h3><p>Only variable nodes are represented. Directed edges encode <code>greater than</code>. Node IDs and tensor order are randomized between episodes.</p></div>
         <div><h3>Persistent memory</h3><p>Every node owns a 32-dimensional hidden vector. Two directional message-passing rounds update it before each action. Hidden state persists inside an episode and resets to zero for a new instance.</p></div>
-        <div><h3>Action</h3><p>The policy scores every <code>(node, value)</code> pair, then applies the highest-scoring assignment. The same network is reused until the graph is feasible or the budget is exhausted.</p></div>
-        <div><h3>Training signal</h3><p>For a reliable POC, supervised teacher trajectories set the first incorrect node along the chain to <code>2N − 1 − depth</code>. The test asks whether the learned recurrent procedure generalizes to unseen chains.</p></div>
+        <div><h3>Action</h3><p>The policy scores every <code>(node, value)</code> pair. Training samples actions; evaluation takes the highest-scoring action. Exact no-op assignments are the only masked actions.</p></div>
+        <div><h3>Reward-only learning</h3><p>REINFORCE uses discounted returns and an entropy bonus. Reward comes from reducing violation energy, minus a small action cost, plus a feasibility bonus and a terminal penalty for remaining violations. No constructive solution or target value is supplied.</p></div>
       </div>
     </section>
 
     <footer><a href="../">Back to mikadou.github.io</a><span>•</span><a href="README.md">Implementation notes</a></footer>
   </main>
   <script src="app.js"></script>
-  <script src="fix.js"></script>
+  <script src="reward.js"></script>
   <script src="budget.js"></script>
 </body>
 </html>
