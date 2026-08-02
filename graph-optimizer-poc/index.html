@@ -3,20 +3,20 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Browser proof of concept: a recurrent graph policy learns from optimization rewards to solve strict monotonic chains and is compared with simulated annealing.">
-  <title>Reward-Trained Graph Optimizer POC</title>
+  <meta name="description" content="Browser proof of concept comparing simulated annealing with neural mutation proposals against simulated annealing with random mutation proposals.">
+  <title>Neural Mutation Simulated Annealing POC</title>
   <link rel="stylesheet" href="styles.css">
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
 </head>
 <body>
   <main class="page-shell">
     <header class="hero">
-      <p class="eyebrow">Learned optimization proof of concept</p>
-      <h1>Reward-trained graph policy vs. simulated annealing</h1>
+      <p class="eyebrow">Learned mutation proof of concept</p>
+      <h1>Neural mutation SA vs. random mutation SA</h1>
       <p class="lede">
-        A recurrent graph policy repeatedly chooses a variable and value for a shuffled strict chain
-        <code>xₐ &gt; xᵦ &gt; …</code>. It receives no target assignments or depth labels: training uses only
-        changes in violation energy, a step cost, a success bonus, and a terminal failure penalty.
+        Both optimizers use the same simulated-annealing temperature schedule, Metropolis acceptance
+        rule, starting assignment, and proposal budget. The only experimental difference is how the
+        next <code>(node, value)</code> mutation is proposed.
       </p>
       <div class="notice" id="backendNotice">Loading TensorFlow.js…</div>
     </header>
@@ -32,17 +32,16 @@
 
       <div class="control-grid">
         <label>Test chain length<input id="testN" type="number" min="4" max="64" value="12"></label>
-        <label>RL training episodes<input id="trainEpisodes" type="number" min="50" max="10000" step="100" value="2000"></label>
+        <label>Training episodes<input id="trainEpisodes" type="number" min="50" max="10000" step="100" value="2000"></label>
         <label>Train min N<input id="trainMinN" type="number" min="3" max="32" value="4"></label>
         <label>Train max N<input id="trainMaxN" type="number" min="4" max="40" value="8"></label>
-        <label>Training rollout budget<input id="trainBudgetMultiplier" type="number" min="1" value="4"><small>User-selected multiplier × N</small></label>
-        <label>Policy action budget<input id="policyBudgetMultiplier" type="number" min="1" value="6"><small>User-selected multiplier × N</small></label>
-        <label>SA proposal budget<input id="saBudgetMultiplier" type="number" min="1" step="10" value="250"><small>User-selected multiplier × N</small></label>
+        <label>Training SA proposals<input id="trainBudgetMultiplier" type="number" min="1" value="8"><small>Multiplier × N per episode</small></label>
+        <label>Comparison proposals<input id="proposalBudgetMultiplier" type="number" min="1" step="10" value="250"><small>Same multiplier × N for both methods</small></label>
       </div>
 
       <div class="button-row">
         <button id="newProblemBtn" type="button">New problem</button>
-        <button id="trainBtn" class="primary" type="button">Train from rewards</button>
+        <button id="trainBtn" class="primary" type="button">Train neural mutation</button>
         <button id="compareBtn" type="button" disabled>Run comparison</button>
         <button id="benchmarkBtn" type="button" disabled>Benchmark 30</button>
         <button id="stopBtn" class="danger" type="button" disabled>Stop</button>
@@ -51,9 +50,9 @@
 
       <div class="progress-wrap" aria-live="polite">
         <div class="progress-track"><div id="progressBar" class="progress-bar"></div></div>
-        <p id="statusText">Create a problem, then train the policy from rewards.</p>
+        <p id="statusText">Create a problem, then train the neural mutation proposer.</p>
       </div>
-      <p class="caption">Reward-only policy gradients are noisier than supervised imitation. Start with short chains and increase the training range after learning becomes visible.</p>
+      <p class="caption">Training keeps simulated annealing fixed. Policy gradients change only the mutation proposal distribution.</p>
     </section>
 
     <section class="panel" aria-labelledby="problem-title">
@@ -68,62 +67,62 @@
         </div>
       </div>
       <div id="initialGraph" class="chain" aria-label="Initial constraint chain"></div>
-      <p class="caption">The visual order follows the directed constraints. Internal tensor storage is shuffled and remains fixed during the episode.</p>
+      <p class="caption">The visual order follows the directed constraints. Internal tensor storage is shuffled and fixed during each run.</p>
     </section>
 
-    <section class="comparison-grid" aria-label="Optimizer comparison">
+    <section class="comparison-grid" aria-label="Simulated annealing comparison">
       <article class="panel result-panel">
         <div class="section-heading compact">
-          <div><p class="kicker">Learned optimizer</p><h2>Persistent node-state policy</h2></div>
-          <span id="policyStateBadge" class="badge muted">Untrained</span>
+          <div><p class="kicker">Learned proposals</p><h2>SA + neural mutation</h2></div>
+          <span id="policyStateBadge" class="badge muted">Untrained proposer</span>
         </div>
         <div id="policyGraph" class="chain mini"></div>
         <div class="metrics" id="policyMetrics">
-          <div><span>Energy</span><strong>–</strong></div>
-          <div><span>Actions</span><strong>–</strong></div>
-          <div><span>Runtime</span><strong>–</strong></div>
-          <div><span>Success</span><strong>–</strong></div>
-        </div>
-        <p class="caption">Nodes may be revisited and values may be reused. The policy can make mistakes and correct them later.</p>
-      </article>
-
-      <article class="panel result-panel">
-        <div class="section-heading compact">
-          <div><p class="kicker">Generic search baseline</p><h2>Simulated annealing</h2></div>
-          <span class="badge muted">Random proposals</span>
-        </div>
-        <div id="saGraph" class="chain mini"></div>
-        <div class="metrics" id="saMetrics">
-          <div><span>Energy</span><strong>–</strong></div>
+          <div><span>Best energy</span><strong>–</strong></div>
           <div><span>Proposals</span><strong>–</strong></div>
           <div><span>Runtime</span><strong>–</strong></div>
           <div><span>Success</span><strong>–</strong></div>
         </div>
-        <p class="caption">SA chooses one random variable and one random domain value per proposal.</p>
+        <p class="caption">The graph network proposes mutations; the standard SA rule decides whether each proposal is accepted.</p>
+      </article>
+
+      <article class="panel result-panel">
+        <div class="section-heading compact">
+          <div><p class="kicker">Baseline proposals</p><h2>SA + random mutation</h2></div>
+          <span class="badge muted">Uniform proposals</span>
+        </div>
+        <div id="saGraph" class="chain mini"></div>
+        <div class="metrics" id="saMetrics">
+          <div><span>Best energy</span><strong>–</strong></div>
+          <div><span>Proposals</span><strong>–</strong></div>
+          <div><span>Runtime</span><strong>–</strong></div>
+          <div><span>Success</span><strong>–</strong></div>
+        </div>
+        <p class="caption">The baseline chooses a uniformly random variable and a uniformly random replacement value.</p>
       </article>
     </section>
 
     <section class="panel" aria-labelledby="curve-title">
-      <div class="section-heading compact"><div><p class="kicker">One paired run</p><h2 id="curve-title">Current violation energy by iteration</h2></div></div>
+      <div class="section-heading compact"><div><p class="kicker">One paired run</p><h2 id="curve-title">Current violation energy by proposal</h2></div></div>
       <canvas id="energyChart" width="1100" height="360" aria-label="Energy history chart"></canvas>
       <div class="legend">
-        <span><i class="legend-line learned"></i> Reward-trained policy actions</span>
-        <span><i class="legend-line anneal"></i> SA proposals</span>
+        <span><i class="legend-line learned"></i> SA + neural mutation</span>
+        <span><i class="legend-line anneal"></i> SA + random mutation</span>
       </div>
     </section>
 
     <section class="panel" aria-labelledby="benchmark-title">
       <div class="section-heading compact"><div><p class="kicker">Batch evaluation</p><h2 id="benchmark-title">Benchmark summary</h2></div></div>
-      <div id="benchmarkSummary" class="benchmark-empty">Run a 30-instance benchmark after reward training.</div>
+      <div id="benchmarkSummary" class="benchmark-empty">Run a 30-instance benchmark after training the neural mutation proposer.</div>
     </section>
 
     <section class="panel explainer" aria-labelledby="architecture-title">
-      <div class="section-heading compact"><div><p class="kicker">What is implemented</p><h2 id="architecture-title">Model and training</h2></div></div>
+      <div class="section-heading compact"><div><p class="kicker">What is controlled</p><h2 id="architecture-title">Fair proposal comparison</h2></div></div>
       <div class="explain-grid">
-        <div><h3>Graph state</h3><p>Only variable nodes are represented. Directed edges encode <code>greater than</code>. Node IDs and tensor order are randomized between episodes.</p></div>
-        <div><h3>Persistent memory</h3><p>Every node owns a 32-dimensional hidden vector. Two directional message-passing rounds update it before each action. Hidden state persists inside an episode and resets to zero for a new instance.</p></div>
-        <div><h3>Action</h3><p>The policy scores every <code>(node, value)</code> pair. Training samples actions; evaluation takes the highest-scoring action. Exact no-op assignments are the only masked actions.</p></div>
-        <div><h3>Reward-only learning</h3><p>REINFORCE uses discounted returns and an entropy bonus. Reward comes from reducing violation energy, minus a small action cost, plus a feasibility bonus and a terminal penalty for remaining violations. No constructive solution or target value is supplied.</p></div>
+        <div><h3>Shared annealing loop</h3><p>Both methods use the same temperature schedule and Metropolis acceptance probability. Neither model can bypass rejected moves.</p></div>
+        <div><h3>Neural proposer</h3><p>A recurrent graph network scores every <code>(node, value)</code> mutation. Persistent per-node state receives temperature, previous acceptance, and previous energy delta.</p></div>
+        <div><h3>Training signal</h3><p>REINFORCE rewards accepted energy reductions and improvements to the best solution, with a success bonus and small costs for proposals and rejections. No target assignment is supplied.</p></div>
+        <div><h3>Evaluation</h3><p>Both variants start from the same assignment and receive the same number of proposals. The experiment therefore measures mutation quality rather than replacing simulated annealing.</p></div>
       </div>
     </section>
 
