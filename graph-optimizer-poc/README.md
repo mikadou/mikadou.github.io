@@ -25,7 +25,7 @@ A feasible assignment has energy zero.
 
 ## Exact untrained baseline
 
-The final action projection starts at zero. All legal mutations therefore have equal logits. Before training, neural SA explicitly uses the same one-draw uniform mutation mapping and the same acceptance random stream as random SA, so proposals, accept/reject decisions, energy history, and final assignment are identical. Runtime differs because neural SA still executes the graph network.
+The final action projection starts at zero. Before training, neural SA explicitly uses the same one-draw uniform mutation mapping and the same acceptance random stream as random SA, so proposals, accept/reject decisions, energy history, and final assignment are identical. Runtime differs because neural SA still executes the graph network.
 
 ## Features
 
@@ -44,7 +44,7 @@ Each node receives:
 - recent acceptance rate;
 - stagnation since the last best-energy improvement.
 
-Each candidate `(node, value)` action additionally receives objective-derived diagnostics:
+Each sampled `(node, value)` candidate additionally receives objective-derived diagnostics:
 
 - proposed value and displacement;
 - new predecessor and successor violations;
@@ -56,11 +56,19 @@ Each candidate `(node, value)` action additionally receives objective-derived di
 
 These quantities do not reveal a target assignment. They expose the energy function and fixed SA rule that already define the optimization problem.
 
+## Sampled candidate policy
+
+Training and trained inference sample at most 32 distinct legal actions before action features are built. The network scores and selects only among those candidates. When the legal action space contains 32 or fewer moves, the complete legal set is used.
+
+Candidate actions are sampled uniformly without replacement. Because every legal action has the same candidate-generation probability, no sampled-softmax correction is required for this version.
+
+This changes action-specific feature construction, utility storage, neural scoring, and the policy loss from `O(|A|)` to `O(min(32, |A|))` per visited state. The graph message-passing encoder still processes all graph nodes.
+
 ## Counterfactual training
 
-Training visits states through the same simulated-annealing environment used at evaluation. At every visited state, all legal mutations are evaluated with the real energy function and acceptance probability.
+Training visits states through the same simulated-annealing environment used at evaluation. At every visited state, the real energy function and acceptance rule evaluate the sampled legal mutations.
 
-The differentiable objective maximizes expected standardized mutation utility under the policy. Utility rewards expected current-energy reduction, expected best-energy improvement, and immediate feasibility, while penalizing rejection probability and distance from local feasibility. A KL penalty toward the uniform distribution prevents premature collapse, and 10% of rollout proposals remain uniformly random.
+The differentiable objective maximizes expected standardized mutation utility over the candidate set. Utility rewards expected current-energy reduction, expected best-energy improvement, and immediate feasibility, while penalizing rejection probability and distance from local feasibility. A KL penalty toward uniform selection within the candidate set prevents premature collapse, and 10% of rollout choices remain uniform within the sampled candidates.
 
 This replaces high-variance one-trajectory REINFORCE credit assignment. There are still no solution labels, constructive trajectories, target values, or teacher actions.
 
@@ -99,7 +107,7 @@ The best accepted assignment is retained for reporting.
 1. Reset and compare once to verify exact untrained parity.
 2. Train at `N = 8`, `8N` proposals for 500–2,000 episodes.
 3. Benchmark 30 paired instances with the same `N` and horizon.
-4. Inspect success rate, median final energy, acceptance rate, and proposal count.
-5. Increase the graph size or horizon gradually, keeping the training and evaluation envelopes close.
+4. Compare learning speed and success rate against the previous full-action implementation.
+5. Increase graph size gradually; sampled candidates should become increasingly beneficial as the legal action space grows.
 
-The neural version will remain slower per proposal because it evaluates a graph network and action features. Its intended advantage is proposal quality, not wall-clock speed.
+The neural version will remain slower per proposal than random SA because it evaluates a graph network and sampled action features. Its intended advantage is proposal quality and scalable action handling, not raw wall-clock speed against the random baseline.
