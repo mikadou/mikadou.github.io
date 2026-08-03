@@ -52,7 +52,7 @@
         <div class="progress-track"><div id="progressBar" class="progress-bar"></div></div>
         <p id="statusText">Compare immediately to verify uniform initialization, or train the neural proposer.</p>
       </div>
-      <p class="caption">Defaults deliberately match training and evaluation at N=8 and 8N proposals. Increase graph size and horizon together only after learning is visible.</p>
+      <p class="caption">Each trained neural proposal samples and reranks at most 32 legal actions. Defaults deliberately match training and evaluation at N=8 and 8N proposals.</p>
     </section>
 
     <section class="panel" aria-labelledby="problem-title">
@@ -84,7 +84,7 @@
           <div><span>Runtime</span><strong>–</strong></div>
           <div><span>Success</span><strong>–</strong></div>
         </div>
-        <p class="caption">The network sees exact candidate energy effects and proposes mutations; the standard SA rule still accepts or rejects them.</p>
+        <p class="caption">The network reranks 32 sampled legal mutations using exact candidate energy effects; the standard SA rule still accepts or rejects the selected move.</p>
       </article>
 
       <article class="panel result-panel">
@@ -122,8 +122,8 @@
       <div class="section-heading compact"><div><p class="kicker">What is controlled</p><h2 id="architecture-title">Observable proposal quality</h2></div></div>
       <div class="explain-grid">
         <div><h3>Graph state</h3><p>Nodes receive local margins plus total energy, best energy, violated-edge fraction, recent acceptance, remaining budget, temperature, and stagnation.</p></div>
-        <div><h3>Candidate features</h3><p>Every <code>(node, value)</code> action receives its exact local energy delta, resulting energy, new adjacent violations, SA acceptance probability, and distance from the locally feasible interval.</p></div>
-        <div><h3>Training signal</h3><p>At each visited state, the real objective scores every legal mutation. The policy minimizes expected counterfactual cost with a KL penalty toward uniform exploration. No solution assignment or teacher action is supplied.</p></div>
+        <div><h3>Candidate sampling</h3><p>Each step samples 32 distinct legal mutations before action features are built. Small action spaces with 32 or fewer legal moves are evaluated completely.</p></div>
+        <div><h3>Training signal</h3><p>The real objective scores only the sampled mutations. The policy minimizes expected counterfactual cost with a KL penalty toward uniform selection within the candidate set.</p></div>
         <div><h3>Stable horizon</h3><p>Per-node recurrent memory resets every 32 proposals, and the default training and evaluation envelopes match. The UI warns when testing extrapolates far beyond training.</p></div>
       </div>
     </section>
@@ -133,5 +133,6 @@
   <script src="core.js"></script>
   <script src="reward.js"></script>
   <script src="runtime.js"></script>
+  <script src="candidate-sampling.js"></script>
 </body>
 </html>
