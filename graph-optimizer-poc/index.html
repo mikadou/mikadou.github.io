@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Browser proof of concept comparing simulated annealing with neural mutation proposals against simulated annealing with random mutation proposals.">
+  <meta name="description" content="Browser proof of concept comparing simulated annealing with a counterfactually trained neural mutation proposer against uniform random mutation.">
   <title>Neural Mutation Simulated Annealing POC</title>
   <link rel="stylesheet" href="styles.css">
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
@@ -15,8 +15,8 @@
       <h1>Neural mutation SA vs. random mutation SA</h1>
       <p class="lede">
         Both optimizers use the same simulated-annealing temperature schedule, Metropolis acceptance
-        rule, starting assignment, and proposal budget. The only experimental difference is how the
-        next <code>(node, value)</code> mutation is proposed.
+        rule, starting assignment, and proposal budget. The neural network changes only the next
+        <code>(node, value)</code> mutation distribution.
       </p>
       <div class="notice" id="backendNotice">Loading TensorFlow.js…</div>
     </header>
@@ -31,12 +31,12 @@
       </div>
 
       <div class="control-grid">
-        <label>Test chain length<input id="testN" type="number" min="4" max="64" value="12"></label>
+        <label>Test chain length<input id="testN" type="number" min="4" max="64" value="8"></label>
         <label>Training episodes<input id="trainEpisodes" type="number" min="50" max="10000" step="100" value="2000"></label>
-        <label>Train min N<input id="trainMinN" type="number" min="3" max="32" value="4"></label>
+        <label>Train min N<input id="trainMinN" type="number" min="3" max="32" value="8"></label>
         <label>Train max N<input id="trainMaxN" type="number" min="4" max="40" value="8"></label>
         <label>Training SA proposals<input id="trainBudgetMultiplier" type="number" min="1" value="8"><small>Multiplier × N per episode</small></label>
-        <label>Comparison proposals<input id="proposalBudgetMultiplier" type="number" min="1" step="10" value="250"><small>Same multiplier × N for both methods</small></label>
+        <label>Comparison proposals<input id="proposalBudgetMultiplier" type="number" min="1" value="8"><small>Keep near training horizon while debugging</small></label>
       </div>
 
       <div class="button-row">
@@ -52,7 +52,7 @@
         <div class="progress-track"><div id="progressBar" class="progress-bar"></div></div>
         <p id="statusText">Compare immediately to verify uniform initialization, or train the neural proposer.</p>
       </div>
-      <p class="caption">At reset, the neural action projection is zero, so all legal mutations are uniform. With the same random streams, an untrained neural run exactly matches random-mutation SA.</p>
+      <p class="caption">Defaults deliberately match training and evaluation at N=8 and 8N proposals. Increase graph size and horizon together only after learning is visible.</p>
     </section>
 
     <section class="panel" aria-labelledby="problem-title">
@@ -80,10 +80,11 @@
         <div class="metrics" id="policyMetrics">
           <div><span>Best energy</span><strong>–</strong></div>
           <div><span>Proposals</span><strong>–</strong></div>
+          <div><span>Acceptance</span><strong>–</strong></div>
           <div><span>Runtime</span><strong>–</strong></div>
           <div><span>Success</span><strong>–</strong></div>
         </div>
-        <p class="caption">Before training, this proposer is exactly uniform. After training, the graph network biases mutation probabilities while SA still accepts or rejects every proposal.</p>
+        <p class="caption">The network sees exact candidate energy effects and proposes mutations; the standard SA rule still accepts or rejects them.</p>
       </article>
 
       <article class="panel result-panel">
@@ -95,10 +96,11 @@
         <div class="metrics" id="saMetrics">
           <div><span>Best energy</span><strong>–</strong></div>
           <div><span>Proposals</span><strong>–</strong></div>
+          <div><span>Acceptance</span><strong>–</strong></div>
           <div><span>Runtime</span><strong>–</strong></div>
           <div><span>Success</span><strong>–</strong></div>
         </div>
-        <p class="caption">The baseline samples uniformly from every legal variable-and-replacement-value mutation.</p>
+        <p class="caption">The baseline chooses uniformly from every legal node and replacement-value pair.</p>
       </article>
     </section>
 
@@ -113,16 +115,16 @@
 
     <section class="panel" aria-labelledby="benchmark-title">
       <div class="section-heading compact"><div><p class="kicker">Batch evaluation</p><h2 id="benchmark-title">Benchmark summary</h2></div></div>
-      <div id="benchmarkSummary" class="benchmark-empty">Benchmark immediately to verify untrained parity, or train the neural mutation proposer first.</div>
+      <div id="benchmarkSummary" class="benchmark-empty">Benchmark immediately for untrained parity, or train the neural proposer first.</div>
     </section>
 
     <section class="panel explainer" aria-labelledby="architecture-title">
-      <div class="section-heading compact"><div><p class="kicker">What is controlled</p><h2 id="architecture-title">Fair proposal comparison</h2></div></div>
+      <div class="section-heading compact"><div><p class="kicker">What is controlled</p><h2 id="architecture-title">Observable proposal quality</h2></div></div>
       <div class="explain-grid">
-        <div><h3>Shared annealing loop</h3><p>Both methods use the same temperature schedule and Metropolis acceptance probability. Neither model can bypass rejected moves.</p></div>
-        <div><h3>Uniform initialization</h3><p>The neural output projection starts at zero. All legal mutations therefore have equal probability, and a shared sampler makes the untrained trajectory identical to random SA for the same seed.</p></div>
-        <div><h3>Training signal</h3><p>REINFORCE rewards accepted energy reductions and improvements to the best solution, with a success bonus and small costs for proposals and rejections. No target assignment is supplied.</p></div>
-        <div><h3>Evaluation</h3><p>Both variants start from the same assignment and receive the same proposals and acceptance thresholds before training. After training, only the neural proposal probabilities differ.</p></div>
+        <div><h3>Graph state</h3><p>Nodes receive local margins plus total energy, best energy, violated-edge fraction, recent acceptance, remaining budget, temperature, and stagnation.</p></div>
+        <div><h3>Candidate features</h3><p>Every <code>(node, value)</code> action receives its exact local energy delta, resulting energy, new adjacent violations, SA acceptance probability, and distance from the locally feasible interval.</p></div>
+        <div><h3>Training signal</h3><p>At each visited state, the real objective scores every legal mutation. The policy minimizes expected counterfactual cost with a KL penalty toward uniform exploration. No solution assignment or teacher action is supplied.</p></div>
+        <div><h3>Stable horizon</h3><p>Per-node recurrent memory resets every 32 proposals, and the default training and evaluation envelopes match. The UI warns when testing extrapolates far beyond training.</p></div>
       </div>
     </section>
 
@@ -131,6 +133,5 @@
   <script src="core.js"></script>
   <script src="reward.js"></script>
   <script src="runtime.js"></script>
-  <script src="uniform-init.js"></script>
 </body>
 </html>
