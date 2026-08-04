@@ -78,7 +78,7 @@ RecurrentGraphPolicy.prototype.trainEpisode = function trainActorCriticEpisode(
     actorCrossEntropySum += crossEntropy(
       targetPolicy,
       actorLogits,
-      ACTOR_POOL_TEMPERATURE
+      ACTOR_CANDIDATE_TEMPERATURE
     );
     selectedScoreSum += totalScores[selectedPosition];
     trajectory.push({
@@ -164,10 +164,10 @@ RecurrentGraphPolicy.prototype.trainEpisode = function trainActorCriticEpisode(
       );
 
       const actorLogProbabilities = tf.logSoftmax(
-        output.actorLogits.div(ACTOR_POOL_TEMPERATURE)
+        output.actorLogits.div(ACTOR_CANDIDATE_TEMPERATURE)
       );
       const actorProbabilities = tf.softmax(
-        output.actorLogits.div(ACTOR_POOL_TEMPERATURE)
+        output.actorLogits.div(ACTOR_CANDIDATE_TEMPERATURE)
       );
       const targetPolicy = tf.tensor1d(item.targetPolicy);
       const actorCrossEntropy = targetPolicy.mul(actorLogProbabilities).sum().neg();
@@ -216,7 +216,6 @@ RecurrentGraphPolicy.prototype.trainEpisode = function trainActorCriticEpisode(
 
   return lossValue;
 };
-
 
 async function trainActorCriticPolicy() {
   if (state.busy) return;
@@ -294,4 +293,3 @@ async function trainActorCriticPolicy() {
     state.stopRequested = false;
   }
 }
-

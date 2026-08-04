@@ -2,26 +2,27 @@
 
 // Candidate actor-critic graph search.
 //
-// The learned path no longer uses simulated-annealing acceptance. At every
-// search step, the actor selects 24 proposals from a bounded 64-action pool,
-// eight uniformly random legal actions are added for exploration, the exact
-// immediate objective change is calculated for all candidates, and a learned
-// critic predicts continuation value. The selected move is always applied.
+// The actor proposes actions directly from a factorized distribution: first a
+// variable node, then a numeric replacement value for that node. It never
+// constructs or ranks an intermediate list of joint (node, value) actions.
+// Eight uniformly random legal actions are added for exploration, and the
+// critic evaluates only the final candidate set.
 
-const ACTOR_POOL_COUNT = 64;
 const ACTOR_CANDIDATE_COUNT = 24;
 const RANDOM_CANDIDATE_COUNT = 8;
 const TOTAL_CANDIDATE_COUNT = ACTOR_CANDIDATE_COUNT + RANDOM_CANDIDATE_COUNT;
 const ACTOR_CRITIC_DISCOUNT = 0.97;
 const TERMINAL_SUCCESS_REWARD = 1.0;
 const TRAIN_ACTION_EXPLORATION = 0.10;
-const ACTOR_POOL_TEMPERATURE = 1.0;
+const ACTOR_CANDIDATE_TEMPERATURE = 1.0;
 const TRAIN_SELECTION_TEMPERATURE = 0.70;
 const EVAL_SELECTION_TEMPERATURE = 0.20;
 const ACTOR_TARGET_TEMPERATURE = 0.35;
 const ACTOR_ENTROPY_WEIGHT = 0.01;
 const CRITIC_LOSS_WEIGHT = 1.0;
 const RETURN_CLIP = 5.0;
+const MIN_VALUE_SCALE = 0.05;
+const MAX_VALUE_SCALE = 0.75;
 
 function actorTrainingTemperature() {
   const progress = Math.min(1, state.trainedEpisodes / 3000);
@@ -259,16 +260,56 @@ function argMax(values) {
   return bestIndex;
 }
 
-function samplePositionsWithoutReplacement(logits, requestedCount, temperature, rng) {
-  const count = Math.min(Math.max(0, requestedCount), logits.length);
-  const safeTemperature = Math.max(0.05, temperature);
-  const ranked = logits.map((logit, index) => {
-    const uniform = clamp(rng.next(), 1e-9, 1 - 1e-9);
-    const gumbel = -Math.log(-Math.log(uniform));
-    const score = (Number.isFinite(logit) ? logit : 0) / safeTemperature + gumbel;
-    return { index, score };
-  });
-  ranked.sort((left, right) => right.score - left.score);
-  return ranked.slice(0, count).map(item => item.index);
+function sampleStandardNormal(rng) {
+  const u1 = clamp(rng.next(), 1e-9, 1 - 1e-9);
+  const u2 = rng.next();
+  return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
 }
 
+function sampleActorActionsDirectly(
+  problem,
+  values,
+  actorData,
+  rng,
+  requestedCount,
+  excluded = null
+) {
+  const excludedSet = excluded || new Set();
+  const targetCount = Math.min(
+    Math.max(0, requestedCount),
+    Math.max(0, legalActionCount(problem) - excludedSet.size)
+  );
+  if (!targetCount) return [];
+
+  const nodeProbabilities = softmaxArray(
+    Array.from(actorData.nodeLogits),
+    actorTrainingTemperature()
+  );
+  const selected = [];
+  const seen = new Set(excludedSet);
+  const maxAttempts = Math.max(100, targetCount * 80);
+
+  for (let attempt = 0; attempt < maxAttempts && selected.length < targetCount; attempt++) {
+    const node = sampleFromProbabilities(nodeProbabilities, rng);
+    const mean = actorData.valueMeans[node];
+    const scale = actorData.valueScales[node];
+    const normalizedValue = clamp(mean + scale * sampleStandardNormal(rng), 0, 1);
+    const value = Math.round(normalizedValue * problem.domainMax);
+    if (value === values[node]) continue;
+    const actionIndex = node * problem.domainSize + value;
+    if (seen.has(actionIndex)) continue;
+    seen.add(actionIndex);
+    selected.push(actionIndex);
+  }
+
+  if (selected.length < targetCount) {
+    selected.push(...sampleUniqueUniformActions(
+      problem,
+      values,
+      rng,
+      targetCount - selected.length,
+      seen
+    ));
+  }
+  return selected;
+}

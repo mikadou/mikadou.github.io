@@ -1,10 +1,43 @@
 function ensureActorCriticParameters(policy) {
   if (policy.actorCriticReady) return;
-  const contextDim = HIDDEN_DIM * 2 + FEATURE_DIM + ACTION_FEATURE_DIM;
+  const nodeContextDim = HIDDEN_DIM * 2 + FEATURE_DIM;
+  const criticContextDim = nodeContextDim + ACTION_FEATURE_DIM;
+
+  policy.wActorNode = policy.add(tf.variable(
+    tf.zeros([nodeContextDim, 1]),
+    true,
+    `${policy.prefix}_wActorNode`
+  ));
+  policy.bActorNode = policy.add(tf.variable(
+    tf.zeros([1]),
+    true,
+    `${policy.prefix}_bActorNode`
+  ));
+  policy.wActorValueMean = policy.add(initVariable(
+    [nodeContextDim, 1],
+    `${policy.prefix}_wActorValueMean`,
+    nodeContextDim
+  ));
+  policy.bActorValueMean = policy.add(tf.variable(
+    tf.zeros([1]),
+    true,
+    `${policy.prefix}_bActorValueMean`
+  ));
+  policy.wActorValueScale = policy.add(tf.variable(
+    tf.zeros([nodeContextDim, 1]),
+    true,
+    `${policy.prefix}_wActorValueScale`
+  ));
+  policy.bActorValueScale = policy.add(tf.variable(
+    tf.zeros([1]),
+    true,
+    `${policy.prefix}_bActorValueScale`
+  ));
+
   policy.wCritic1 = policy.add(initVariable(
-    [contextDim, ACTION_DIM],
+    [criticContextDim, ACTION_DIM],
     `${policy.prefix}_wCritic1`,
-    contextDim
+    criticContextDim
   ));
   policy.bCritic1 = policy.add(tf.variable(
     tf.zeros([ACTION_DIM]),
@@ -67,6 +100,52 @@ RecurrentGraphPolicy.prototype.encodeActorCriticState = function encodeActorCrit
   return { hidden: nextHidden, nodeContext, context };
 };
 
+RecurrentGraphPolicy.prototype.actorDistribution = function actorDistribution(encoded) {
+  ensureActorCriticParameters(this);
+  const nodeLogits = encoded.nodeContext.matMul(this.wActorNode)
+    .add(this.bActorNode)
+    .reshape([encoded.nodeContext.shape[0]]);
+  const valueMeans = tf.sigmoid(
+    encoded.nodeContext.matMul(this.wActorValueMean).add(this.bActorValueMean)
+  ).reshape([encoded.nodeContext.shape[0]]);
+  const valueScales = tf.sigmoid(
+    encoded.nodeContext.matMul(this.wActorValueScale).add(this.bActorValueScale)
+  ).mul(MAX_VALUE_SCALE - MIN_VALUE_SCALE)
+    .add(MIN_VALUE_SCALE)
+    .reshape([encoded.nodeContext.shape[0]]);
+  return { nodeLogits, valueMeans, valueScales };
+};
+
+RecurrentGraphPolicy.prototype.actorCandidateLogits = function actorCandidateLogits(
+  problem,
+  encoded,
+  candidateActions
+) {
+  const distribution = this.actorDistribution(encoded);
+  const candidateNodes = tf.tensor1d(
+    Int32Array.from(
+      candidateActions,
+      actionIndex => Math.floor(actionIndex / problem.domainSize)
+    ),
+    'int32'
+  );
+  const normalizedValues = tf.tensor1d(Float32Array.from(
+    candidateActions,
+    actionIndex => (actionIndex % problem.domainSize) / Math.max(1, problem.domainMax)
+  ));
+  const nodeLogProbabilities = tf.logSoftmax(distribution.nodeLogits);
+  const selectedNodeLogProbabilities = nodeLogProbabilities.gather(candidateNodes);
+  const means = distribution.valueMeans.gather(candidateNodes);
+  const scales = distribution.valueScales.gather(candidateNodes);
+  const standardized = normalizedValues.sub(means).div(scales);
+  const valueLogDensity = standardized.square().mul(-0.5)
+    .sub(scales.log());
+  return {
+    logits: selectedNodeLogProbabilities.add(valueLogDensity),
+    distribution
+  };
+};
+
 RecurrentGraphPolicy.prototype.scoreActorCriticCandidates = function scoreActorCriticCandidates(
   problem,
   values,
@@ -97,17 +176,14 @@ RecurrentGraphPolicy.prototype.scoreActorCriticCandidates = function scoreActorC
   );
   const selectedNodeContext = encoded.nodeContext.gather(candidateNodes);
   const actionInput = tf.concat([selectedNodeContext, actionFeatures], 1);
-
-  const actorHidden = tf.relu(actionInput.matMul(this.wAction1).add(this.bAction1));
-  const actorLogits = actorHidden.matMul(this.wAction2).add(this.bAction2)
-    .reshape([candidateActions.length]);
+  const actorOutput = this.actorCandidateLogits(problem, encoded, candidateActions);
 
   const criticHidden = tf.relu(actionInput.matMul(this.wCritic1).add(this.bCritic1));
   const continuationValues = criticHidden.matMul(this.wCritic2).add(this.bCritic2)
     .reshape([candidateActions.length]);
 
   return {
-    actorLogits,
+    actorLogits: actorOutput.logits,
     continuationValues,
     immediateRewards: actionData.immediateRewards,
     diagnostics: actionData.diagnostics
@@ -126,35 +202,29 @@ function generateActorCriticCandidates(
   if (legalCount <= TOTAL_CANDIDATE_COUNT) {
     return {
       candidates: allLegalActions(problem, values),
-      poolSize: legalCount,
-      actorCount: Math.max(0, legalCount - Math.min(RANDOM_CANDIDATE_COUNT, legalCount)),
-      randomCount: Math.min(RANDOM_CANDIDATE_COUNT, legalCount)
+      actorCount: legalCount,
+      randomCount: 0,
+      directActor: true
     };
   }
 
-  const actorPool = sampleUniqueUniformActions(
-    problem,
-    values,
-    actorRng,
-    Math.min(ACTOR_POOL_COUNT, legalCount)
-  );
-  const poolOutput = tf.tidy(() => policy.scoreActorCriticCandidates(
-    problem,
-    values,
-    encoded,
-    actorPool
-  ));
-  const poolLogits = Array.from(poolOutput.actorLogits.dataSync());
-  poolOutput.actorLogits.dispose();
-  poolOutput.continuationValues.dispose();
+  const actorOutput = tf.tidy(() => policy.actorDistribution(encoded));
+  const actorData = {
+    nodeLogits: Float32Array.from(actorOutput.nodeLogits.dataSync()),
+    valueMeans: Float32Array.from(actorOutput.valueMeans.dataSync()),
+    valueScales: Float32Array.from(actorOutput.valueScales.dataSync())
+  };
+  actorOutput.nodeLogits.dispose();
+  actorOutput.valueMeans.dispose();
+  actorOutput.valueScales.dispose();
 
-  const actorPositions = samplePositionsWithoutReplacement(
-    poolLogits,
-    Math.min(ACTOR_CANDIDATE_COUNT, actorPool.length),
-    actorTrainingTemperature(),
-    actorRng
+  const actorCandidates = sampleActorActionsDirectly(
+    problem,
+    values,
+    actorData,
+    actorRng,
+    ACTOR_CANDIDATE_COUNT
   );
-  const actorCandidates = actorPositions.map(position => actorPool[position]);
   const seen = new Set(actorCandidates);
   const randomCandidates = sampleUniqueUniformActions(
     problem,
@@ -166,9 +236,9 @@ function generateActorCriticCandidates(
 
   return {
     candidates: actorCandidates.concat(randomCandidates),
-    poolSize: actorPool.length,
     actorCount: actorCandidates.length,
-    randomCount: randomCandidates.length
+    randomCount: randomCandidates.length,
+    directActor: true
   };
 }
 
@@ -200,4 +270,3 @@ function disposeGradientResult(result, clipped) {
   Object.values(result.grads).forEach(tensor => tensor.dispose());
   Object.values(clipped).forEach(tensor => tensor.dispose());
 }
-
