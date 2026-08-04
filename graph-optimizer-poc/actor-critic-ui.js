@@ -11,11 +11,11 @@ const resetBaseModel = resetModel;
 function resetActorCriticModel() {
   resetBaseModel();
   ui.backendNotice.textContent =
-    `TensorFlow.js ready · backend: ${tf.getBackend()} · candidate actor–critic training`;
+    `TensorFlow.js ready · backend: ${tf.getBackend()} · direct actor–critic training`;
   ui.policyStateBadge.textContent = 'Untrained actor–critic';
   ui.policyStateBadge.classList.add('muted');
   ui.statusText.textContent =
-    'Actor starts uniform and the critic starts at zero. Untrained selection is exact one-step hill climbing over the sampled candidates.';
+    'The actor starts with uniform node probabilities and a broad value distribution; the critic starts at zero.';
 }
 
 const createProblemBase = createCurrentProblem;
@@ -49,9 +49,9 @@ ui.policyStateBadge.textContent = state.trainedEpisodes > 0
   ? `${state.trainedEpisodes} actor–critic episodes`
   : 'Untrained actor–critic';
 ui.backendNotice.textContent = tf && tf.getBackend
-  ? `TensorFlow.js ready · backend: ${tf.getBackend()} · candidate actor–critic training`
+  ? `TensorFlow.js ready · backend: ${tf.getBackend()} · direct actor–critic training`
   : ui.backendNotice.textContent;
 if (state.trainedEpisodes === 0) {
   ui.statusText.textContent =
-    'Actor starts uniform and the critic starts at zero. Train the actor–critic or compare its hill-climb bootstrap against random SA.';
+    'The actor directly samples node/value proposals and the zero critic gives a hill-climb bootstrap.';
 }

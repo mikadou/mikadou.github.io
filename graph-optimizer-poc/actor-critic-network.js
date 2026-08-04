@@ -13,10 +13,10 @@ function ensureActorCriticParameters(policy) {
     true,
     `${policy.prefix}_bActorNode`
   ));
-  policy.wActorValueMean = policy.add(initVariable(
-    [nodeContextDim, 1],
-    `${policy.prefix}_wActorValueMean`,
-    nodeContextDim
+  policy.wActorValueMean = policy.add(tf.variable(
+    tf.zeros([nodeContextDim, 1]),
+    true,
+    `${policy.prefix}_wActorValueMean`
   ));
   policy.bActorValueMean = policy.add(tf.variable(
     tf.zeros([1]),

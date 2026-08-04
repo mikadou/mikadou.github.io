@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Browser proof of concept comparing learned candidate actor-critic graph search against uniform-random simulated annealing.">
+  <meta name="description" content="Browser proof of concept comparing direct actor-critic graph search against uniform-random simulated annealing.">
   <title>Graph Actor-Critic Optimizer POC</title>
   <link rel="stylesheet" href="styles.css">
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
@@ -14,9 +14,9 @@
       <p class="eyebrow">Learned graph search proof of concept</p>
       <h1>Actor–critic graph search vs. random simulated annealing</h1>
       <p class="lede">
-        The learned optimizer proposes a bounded action set, calculates each candidate's exact
-        immediate objective change, and uses a learned critic for continuation value. Selected
-        learned moves are always applied; the comparison baseline remains uniform-random SA.
+        The actor directly samples node/value mutations, the runtime calculates each candidate's
+        exact immediate objective change, and a learned critic estimates continuation value.
+        Selected learned moves are always applied; the comparison baseline remains random SA.
       </p>
       <div class="notice" id="backendNotice">Loading TensorFlow.js…</div>
     </header>
@@ -50,9 +50,9 @@
 
       <div class="progress-wrap" aria-live="polite">
         <div class="progress-track"><div id="progressBar" class="progress-bar"></div></div>
-        <p id="statusText">The actor starts uniform and the critic starts at zero.</p>
+        <p id="statusText">The actor starts broad and the critic starts at zero.</p>
       </div>
-      <p class="caption">Each learned move uses 24 actor-selected candidates plus 8 uniform exploratory candidates. Defaults match training and evaluation at N=8 and 8N moves.</p>
+      <p class="caption">Each learned move uses 24 directly sampled actor proposals plus 8 uniform exploratory proposals. Defaults match training and evaluation at N=8 and 8N moves.</p>
     </section>
 
     <section class="panel" aria-labelledby="problem-title">
@@ -119,12 +119,12 @@
     </section>
 
     <section class="panel explainer" aria-labelledby="architecture-title">
-      <div class="section-heading compact"><div><p class="kicker">Learned search architecture</p><h2 id="architecture-title">Exact reward plus learned future value</h2></div></div>
+      <div class="section-heading compact"><div><p class="kicker">Learned search architecture</p><h2 id="architecture-title">Direct actor plus learned future value</h2></div></div>
       <div class="explain-grid">
-        <div><h3>Actor proposals</h3><p>A bounded pool of 64 legal actions is scored by the actor. Twenty-four are sampled from that distribution, then eight independent uniform actions are added.</p></div>
-        <div><h3>Exact immediate reward</h3><p>The optimizer temporarily evaluates each candidate's true objective change. The network is not asked to relearn arithmetic already supplied by the model.</p></div>
-        <div><h3>Learned critic</h3><p>The critic predicts discounted continuation return after each candidate. Candidate score is exact immediate reward plus discounted learned continuation value.</p></div>
-        <div><h3>Actor–critic training</h3><p>The critic learns from realized episode returns. The actor learns to place probability on candidates favored by exact reward plus critic value. The learned path does not use SA acceptance.</p></div>
+        <div><h3>Direct actor</h3><p>The actor predicts a distribution over variable nodes plus a value distribution for each node. It samples 24 actions directly without constructing a joint-action pool.</p></div>
+        <div><h3>Exact immediate reward</h3><p>The optimizer temporarily evaluates each final candidate's true objective change. The network is not asked to relearn arithmetic already supplied by the model.</p></div>
+        <div><h3>Learned critic</h3><p>The critic predicts discounted continuation return after each final candidate. Candidate score is exact immediate reward plus discounted learned continuation value.</p></div>
+        <div><h3>Exploration</h3><p>Eight uniform legal actions are added to the actor's 24 proposals. The critic reranks only the resulting 32 candidates, and the learned path does not use SA acceptance.</p></div>
       </div>
     </section>
 
