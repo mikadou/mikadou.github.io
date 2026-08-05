@@ -31,7 +31,7 @@ The actor never enumerates the Cartesian `(node, value)` action space. It predic
 - a normalized replacement-value mean for each node;
 - a replacement-value scale for each node.
 
-Each actor proposal samples a node and then a value for that node. A learned-search step uses 24 unique actor proposals plus 8 independent uniformly random legal actions. If the complete legal action space has 32 or fewer actions, all legal actions are used.
+Each proposal samples a node and then a value for that node. A learned-search step uses 12 unique actor proposals plus 4 independent uniformly random legal actions. If the complete legal action space has 16 or fewer actions, all legal actions are used.
 
 ## Exact immediate reward
 
@@ -45,51 +45,52 @@ Reaching energy zero adds a terminal reward. The selected action is then actuall
 
 ## Post-action value critic
 
-The critic is a state-value network. For every candidate:
+For every candidate, the critic receives a representation of the actual resulting state:
 
 1. apply the action to a temporary value array;
 2. update the objective, best energy, violations, reward history, and stagnation;
 3. build node features from that resulting state;
-4. pool each node feature by mean, minimum, maximum, and standard deviation;
+4. pool every feature by mean, minimum, maximum, and standard deviation;
 5. predict continuation value from the fixed-size pooled state vector.
 
 Candidate selection uses:
 
 ```text
-score = exactImmediateReward + 0.97 * V(resultingState)
+score = exactImmediateReward + criticInfluence * 0.97 * V(resultingState)
 ```
 
-Terminal states and states beyond the search horizon have zero continuation value.
-
-The critic no longer receives the current state plus action-specific objective hints. It receives a representation of the actual post-action state. Its network is separate from the recurrent actor encoder:
-
-```text
-actor:  recurrent graph encoder -> node probability + value distribution
-critic: pooled post-action state -> dense 48 ReLU -> continuation value
-```
+The critic starts with zero influence for 100 completed episodes. Its influence then ramps toward one over 400 episodes, and it also requires useful replay coverage. This prevents an immature critic from overriding the exact objective signal.
 
 ## Grounded actor training
 
-The previous actor target depended on the critic's current predictions, creating a self-teaching loop. The new target is grounded in observed outcomes:
+Every candidate receives its exact immediate reward. The executed candidate additionally receives its realized discounted continuation return. The target distribution now uses temperature `0.10`, making objective improvements more distinct than the previous `0.35` target.
 
-- every sampled candidate receives its exact immediate reward;
-- the executed candidate additionally receives its realized discounted continuation return;
-- the actor learns a soft target distribution formed from those grounded scores.
-
-This lets an executed temporary uphill move become a positive actor example when it produces enough later improvement.
+Actor training no longer backpropagates through every step of the full episode. The rollout stores recurrent hidden states as detached tensors, then trains on at most 16 evenly distributed trajectory states. The actor still receives the recurrent context that produced each decision, but gradients do not traverse the entire history.
 
 ## Critic replay
 
-The critic learns from Monte Carlo continuation returns of executed actions. Post-action state vectors and targets are stored in a replay buffer of 1,024 transitions. Four replay updates of up to 32 transitions are performed after every episode.
+The replay buffer retains 1,024 post-action transitions. After every episode, the critic performs two updates of up to 64 transitions each. This processes the same maximum number of replay examples as the previous four-by-32 schedule with half as many optimizer invocations.
 
-Replay provides repeated, mixed-episode supervision and avoids the previous single update over only the latest trajectory. Since the target is a realized return rather than a bootstrapped critic prediction, this version does not require a target network.
+## Browser performance profile
+
+The performance profile targets avoidable browser overhead while leaving the feature set and network widths unchanged:
+
+- 12 actor candidates plus 4 random candidates instead of 24 plus 8;
+- one synchronized read for the actor distribution;
+- one synchronized read for actor logits and critic values together;
+- actor minibatches of at most 16 detached states;
+- two critic batches of up to 64;
+- TensorFlow.js production mode enabled before model initialization;
+- default training and comparison horizons reduced from `8N` to `4N` moves.
+
+TensorFlow.js normally selects WebGL in a supported browser. The UI displays the active backend. If it reports another backend, browser or GPU configuration may be preventing WebGL use.
 
 ## Search loop
 
 For each learned-search step:
 
-1. the actor directly generates 24 proposals;
-2. 8 random legal proposals are added;
+1. the actor directly generates 12 proposals;
+2. 4 random legal proposals are added;
 3. exact immediate reward is calculated for each candidate;
 4. the critic evaluates each actual resulting state;
 5. one candidate is sampled from the combined scores;
@@ -115,12 +116,12 @@ exp(-delta / T(t))        otherwise
 
 ## Suggested experiment
 
-1. Reset and compare the untrained exact-reward bootstrap against random SA.
-2. Train at `N = 8`, `8N` moves for 500–2,000 episodes.
-3. Watch actor loss, critic loss, episode return, final energy, and recent success.
-4. Benchmark 30 paired instances with the same initial assignments and move budget.
-5. Verify that trained search improves over the untrained immediate-reward-only behavior.
+1. Reload the page and reset the model so the new optimizer and production settings start cleanly.
+2. Train at `N = 8`, `4N` moves for 500 episodes.
+3. Benchmark the trained model against its untrained exact-reward bootstrap and random SA.
+4. Increase to `8N` only if the shorter horizon is demonstrably limiting success.
+5. Judge learning with fixed evaluation runs rather than exploratory training success alone.
 
 ## Current limitations
 
-The critic still learns only from executed actions; the objective provides exact immediate information for all candidates but not their unknown long-term outcomes. Further improvements could include prioritized replay, multi-step TD targets, critic ensembles, uncertainty-aware exploration, or short candidate rollouts.
+The critic learns long-term outcomes only for executed actions. The pooled critic representation also discards graph position beyond what is encoded in each feature. Further improvements could include learned graph pooling, prioritized replay, critic ensembles, uncertainty-aware exploration, or parallel environment batches.
