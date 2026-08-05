@@ -117,7 +117,7 @@ exp(-delta / T(t))        otherwise
 
 1. Reset and compare the untrained exact-reward bootstrap against random SA.
 2. Train at `N = 8`, `8N` moves for 500–2,000 episodes.
-3. Watch actor loss, critic loss, replay size, episode return, final energy, and recent success.
+3. Watch actor loss, critic loss, episode return, final energy, and recent success.
 4. Benchmark 30 paired instances with the same initial assignments and move budget.
 5. Verify that trained search improves over the untrained immediate-reward-only behavior.
 
