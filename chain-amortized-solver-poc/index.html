@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Amortized Chain Solver PoC</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">Proof of concept · learned optimization</p>
+      <h1>Can a policy learn the structure that generic search keeps rediscovering?</h1>
+      <p class="lede">We repeatedly solve integer chains <code>x₀ &gt; x₁ &gt; … &gt; xₙ₋₁</code>. An exact dynamic program supplies training labels and the ground truth optimum. A small convolutional policy amortizes that work across instances; simulated annealing starts fresh on every instance.</p>
+    </header>
+
+    <section class="card controls">
+      <div>
+        <label>Training chain length <span id="trainNLabel">24</span></label>
+        <input id="trainN" type="range" min="12" max="48" step="4" value="24" />
+      </div>
+      <div>
+        <label>Training instances <span id="trainCountLabel">320</span></label>
+        <input id="trainCount" type="range" min="80" max="800" step="80" value="320" />
+      </div>
+      <div>
+        <label>Epochs <span id="epochsLabel">8</span></label>
+        <input id="epochs" type="range" min="2" max="20" step="2" value="8" />
+      </div>
+      <div class="buttons">
+        <button id="trainBtn">Train policy</button>
+        <button id="benchmarkBtn" class="secondary" disabled>Run benchmark</button>
+      </div>
+      <div id="status" class="status">TensorFlow.js is loading…</div>
+    </section>
+
+    <section class="metrics">
+      <article class="metric"><span>Policy</span><strong id="policyGap">—</strong><small>median optimality gap</small></article>
+      <article class="metric"><span>SA</span><strong id="saGap">—</strong><small>median optimality gap</small></article>
+      <article class="metric"><span>Policy effort</span><strong id="policyEffort">—</strong><small>forward passes / instance</small></article>
+      <article class="metric"><span>SA effort</span><strong id="saEffort">—</strong><small>objective evaluations / instance</small></article>
+    </section>
+
+    <section class="grid two">
+      <article class="card">
+        <h2>Scaling experiment</h2>
+        <p>The policy is trained at one chain length, then tested both in- and out-of-distribution. SA receives the same objective and feasibility rules but no cross-instance memory.</p>
+        <canvas id="scalingChart" width="760" height="360"></canvas>
+        <div class="legend"><span><i class="dot policy"></i> learned policy gap</span><span><i class="dot sa"></i> SA gap</span></div>
+      </article>
+      <article class="card">
+        <h2>One held-out instance</h2>
+        <p>Targets can violate monotonicity heavily. The exact solver finds the best strictly descending integer chain; the policy tries to imitate that mapping in one network evaluation.</p>
+        <canvas id="instanceChart" width="760" height="360"></canvas>
+        <div class="legend"><span><i class="dot target"></i> target</span><span><i class="dot exact"></i> exact</span><span><i class="dot policy"></i> policy</span><span><i class="dot sa"></i> SA</span></div>
+      </article>
+    </section>
+
+    <section class="card explanation">
+      <h2>What this PoC does — and does not — prove</h2>
+      <div class="grid two text-grid">
+        <div>
+          <h3>Hypothesis under test</h3>
+          <p>A generic metaheuristic repeatedly pays to discover correlations between variables. A policy trained on a recurring instance distribution can internalize those correlations and spend almost no search effort at deployment.</p>
+          <p>The policy is deliberately simple: a 1-D convolutional network maps the whole target sequence to value logits. A feasibility-aware decoder masks values that would violate the strict chain.</p>
+        </div>
+        <div>
+          <h3>Important caveat</h3>
+          <p>This first experiment uses <strong>imitation learning</strong> from an exact dynamic-programming oracle. It tests whether the solver can <em>represent and generalize</em> a reusable optimization heuristic. A later PoC should remove the oracle during training and learn from objective feedback/self-improvement.</p>
+          <p>SA is intentionally generic but not crippled: it proposes only feasible single-variable changes and uses a temperature schedule. A block-move SA would be a useful next baseline.</p>
+        </div>
+      </div>
+    </section>
+
+    <footer>Everything runs locally in your browser. No training data is uploaded.</footer>
+  </main>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
