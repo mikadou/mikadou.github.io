@@ -1,10 +1,13 @@
 const MAX_VALUE = 127;
 const VALUE_COUNT = MAX_VALUE + 1;
+const MAX_TEST_LENGTH = 120;
 let model = null;
 let trained = false;
+let trainedRange = { min: 12, max: 32 };
 
 const $ = id => document.getElementById(id);
-const trainN = $('trainN');
+const trainMinN = $('trainMinN');
+const trainMaxN = $('trainMaxN');
 const trainCount = $('trainCount');
 const epochs = $('epochs');
 const trainBtn = $('trainBtn');
@@ -16,9 +19,23 @@ function bindRange(input, labelId) {
   input.addEventListener('input', update);
   update();
 }
-bindRange(trainN, 'trainNLabel');
+bindRange(trainMinN, 'trainMinNLabel');
+bindRange(trainMaxN, 'trainMaxNLabel');
 bindRange(trainCount, 'trainCountLabel');
 bindRange(epochs, 'epochsLabel');
+
+trainMinN.addEventListener('input', () => {
+  if (Number(trainMinN.value) > Number(trainMaxN.value)) {
+    trainMaxN.value = trainMinN.value;
+    $('trainMaxNLabel').textContent = trainMaxN.value;
+  }
+});
+trainMaxN.addEventListener('input', () => {
+  if (Number(trainMaxN.value) < Number(trainMinN.value)) {
+    trainMinN.value = trainMaxN.value;
+    $('trainMinNLabel').textContent = trainMinN.value;
+  }
+});
 
 function mulberry32(seed) {
   return function () {
@@ -184,39 +201,44 @@ function solveSA(target, evaluations = target.length * 180, rng = Math.random) {
   return { x: best, cost: bestCost, evaluations };
 }
 
+// Deliberately no explicit chain-length feature. The recurrent model sees only
+// the target and relative position, plus the sequence boundaries themselves.
 function featureTensor(instances) {
   const batch = instances.length;
   const n = instances[0].length;
-  const data = new Float32Array(batch * n * 3);
+  const data = new Float32Array(batch * n * 2);
   let k = 0;
   for (const target of instances) {
     for (let i = 0; i < n; i++) {
       data[k++] = target[i] / MAX_VALUE;
       data[k++] = n === 1 ? 0 : i / (n - 1);
-      data[k++] = n / 72;
     }
   }
-  return tf.tensor3d(data, [batch, n, 3]);
+  return tf.tensor3d(data, [batch, n, 2]);
 }
 
 function buildModel() {
-  const input = tf.input({ shape: [null, 3] });
+  const input = tf.input({ shape: [null, 2] });
 
-  // Keep dilationRate=1 throughout. tfjs' browser Conv2D gradient kernel (used
-  // under the hood by Conv1D) cannot train dilated convolutions. Stacking wide
-  // ordinary convolutions gives a large receptive field while remaining fully
-  // differentiable in WebGL/WASM/CPU backends.
-  let z = tf.layers.conv1d({ filters: 40, kernelSize: 9, padding: 'same', activation: 'relu' }).apply(input);
-  z = tf.layers.conv1d({ filters: 48, kernelSize: 9, padding: 'same', activation: 'relu' }).apply(z);
-  z = tf.layers.conv1d({ filters: 48, kernelSize: 9, padding: 'same', activation: 'relu' }).apply(z);
-  z = tf.layers.conv1d({ filters: 48, kernelSize: 9, padding: 'same', activation: 'relu' }).apply(z);
-  z = tf.layers.conv1d({ filters: 40, kernelSize: 9, padding: 'same', activation: 'relu' }).apply(z);
+  // A bidirectional GRU has global prefix/suffix context and reuses the same
+  // transition at every position. Unlike the old finite-receptive-field CNN,
+  // it can be evaluated on sequence lengths never seen during training.
+  let z = tf.layers.bidirectional({
+    layer: tf.layers.gru({
+      units: 48,
+      returnSequences: true,
+      activation: 'tanh',
+      recurrentActivation: 'sigmoid'
+    }),
+    mergeMode: 'concat'
+  }).apply(input);
 
-  const output = tf.layers.conv1d({
-    filters: VALUE_COUNT,
-    kernelSize: 1,
-    padding: 'same',
-    activation: 'softmax'
+  z = tf.layers.timeDistributed({
+    layer: tf.layers.dense({ units: 64, activation: 'relu' })
+  }).apply(z);
+
+  const output = tf.layers.timeDistributed({
+    layer: tf.layers.dense({ units: VALUE_COUNT, activation: 'softmax' })
   }).apply(z);
 
   const m = tf.model({ inputs: input, outputs: output });
@@ -224,18 +246,14 @@ function buildModel() {
   return m;
 }
 
-async function trainPolicy() {
-  if (!window.tf) throw new Error('TensorFlow.js did not load.');
-  trainBtn.disabled = true;
-  benchmarkBtn.disabled = true;
+function trainingLengths(minN, maxN) {
+  const values = [];
+  for (let n = minN; n <= maxN; n += 4) values.push(n);
+  if (values[values.length - 1] !== maxN) values.push(maxN);
+  return [...new Set(values)].sort((a, b) => a - b);
+}
 
-  const n = Number(trainN.value);
-  const count = Number(trainCount.value);
-  const ep = Number(epochs.value);
-  statusEl.textContent = `Generating ${count} exact training solutions…`;
-  await new Promise(resolve => setTimeout(resolve, 20));
-
-  const rng = mulberry32(1337);
+function makeTrainingBatch(n, count, rng) {
   const instances = [];
   const labels = new Int32Array(count * n);
   for (let b = 0; b < count; b++) {
@@ -245,44 +263,66 @@ async function trainPolicy() {
     labels.set(exact.x, b * n);
   }
 
-  if (model) model.dispose();
-  model = buildModel();
   const xs = featureTensor(instances);
   const labelIds = tf.tensor2d(labels, [count, n], 'int32');
   const ys = tf.oneHot(labelIds, VALUE_COUNT).toFloat();
   labelIds.dispose();
+  return { xs, ys };
+}
 
-  console.log('training shapes', {
-    xs: xs.shape,
-    ys: ys.shape,
-    output: model.outputs[0].shape,
-    backend: tf.getBackend()
-  });
+async function trainPolicy() {
+  if (!window.tf) throw new Error('TensorFlow.js did not load.');
+  trainBtn.disabled = true;
+  benchmarkBtn.disabled = true;
 
-  try {
-    await model.fit(xs, ys, {
-      epochs: ep,
-      batchSize: 32,
-      shuffle: true,
-      validationSplit: 0.12,
-      callbacks: {
-        onEpochEnd: async (epoch, logs) => {
-          const loss = logs.loss?.toFixed(4) ?? '—';
-          const valLoss = logs.val_loss?.toFixed(4) ?? '—';
-          statusEl.textContent = `Epoch ${epoch + 1}/${ep} · loss ${loss} · validation ${valLoss}`;
-          await tf.nextFrame();
-        }
+  const minN = Number(trainMinN.value);
+  const maxN = Number(trainMaxN.value);
+  const countPerEpoch = Number(trainCount.value);
+  const ep = Number(epochs.value);
+  const lengths = trainingLengths(minN, maxN);
+  const perLength = Math.max(8, Math.ceil(countPerEpoch / lengths.length));
+
+  trainedRange = { min: minN, max: maxN };
+  if (model) model.dispose();
+  model = buildModel();
+
+  console.log('model output', model.outputs[0].shape, 'training lengths', lengths, 'backend', tf.getBackend());
+  const rng = mulberry32(1337);
+
+  for (let epoch = 0; epoch < ep; epoch++) {
+    let lossSum = 0;
+    let buckets = 0;
+
+    // Rotate the length order each epoch to avoid always ending on the longest.
+    const order = lengths.map((_, i) => lengths[(i + epoch) % lengths.length]);
+    for (let li = 0; li < order.length; li++) {
+      const n = order[li];
+      statusEl.textContent = `Epoch ${epoch + 1}/${ep} · training n=${n} · range ${minN}–${maxN}`;
+      const { xs, ys } = makeTrainingBatch(n, perLength, rng);
+      try {
+        const history = await model.fit(xs, ys, {
+          epochs: 1,
+          batchSize: Math.min(32, perLength),
+          shuffle: true,
+          verbose: 0
+        });
+        lossSum += history.history.loss[0];
+        buckets++;
+      } finally {
+        xs.dispose();
+        ys.dispose();
       }
-    });
-  } finally {
-    xs.dispose();
-    ys.dispose();
+      await tf.nextFrame();
+    }
+
+    statusEl.textContent = `Epoch ${epoch + 1}/${ep} · mean loss ${(lossSum / Math.max(1, buckets)).toFixed(4)} · lengths ${minN}–${maxN}`;
+    await tf.nextFrame();
   }
 
   trained = true;
   benchmarkBtn.disabled = false;
   trainBtn.disabled = false;
-  statusEl.textContent = 'Training complete. Running the benchmark…';
+  statusEl.textContent = 'Training complete. Running in-range + extrapolation benchmark…';
   await runBenchmark();
 }
 
@@ -295,8 +335,8 @@ function solvePolicy(target) {
   const x = new Int32Array(n);
   let previous = VALUE_COUNT;
 
-  // Greedy feasibility-aware decoding. This is deliberately tiny: all learned
-  // structural knowledge must be present in the network logits.
+  // Tiny feasibility-aware decoder. It only prevents impossible completions;
+  // the neural model still supplies every value preference.
   for (let i = 0; i < n; i++) {
     const lo = n - 1 - i;
     const hi = Math.min(MAX_VALUE, previous - 1);
@@ -331,26 +371,36 @@ function fmt(x) {
   return x.toFixed(x < 10 ? 2 : 1);
 }
 
+function benchmarkLengths(minN, maxN) {
+  const mid = Math.round((minN + maxN) / 2);
+  const candidates = [
+    minN,
+    mid,
+    maxN,
+    Math.round(maxN * 1.5),
+    maxN * 2,
+    maxN * 3
+  ];
+  return [...new Set(candidates)]
+    .map(n => Math.min(MAX_TEST_LENGTH, Math.max(4, Math.round(n))))
+    .filter(n => n <= MAX_VALUE + 1)
+    .sort((a, b) => a - b);
+}
+
 async function runBenchmark() {
   if (!trained) return;
   benchmarkBtn.disabled = true;
   trainBtn.disabled = true;
 
-  const baseN = Number(trainN.value);
-  const lengths = [...new Set([
-    Math.max(12, Math.round(baseN / 2)),
-    baseN,
-    Math.min(72, Math.round(baseN * 1.5)),
-    Math.min(72, baseN * 2),
-    72
-  ])].sort((a, b) => a - b).filter(n => n <= 72);
-
+  const { min: minN, max: maxN } = trainedRange;
+  const lengths = benchmarkLengths(minN, maxN);
   const rng = mulberry32(20260809);
   const rows = [];
 
   for (let li = 0; li < lengths.length; li++) {
     const n = lengths[li];
-    statusEl.textContent = `Benchmarking n=${n} (${li + 1}/${lengths.length})…`;
+    const regime = n <= maxN && n >= minN ? 'in-range' : 'OOD';
+    statusEl.textContent = `Benchmarking n=${n} · ${regime} (${li + 1}/${lengths.length})…`;
     const policyExcess = [];
     const saExcess = [];
 
@@ -363,25 +413,32 @@ async function runBenchmark() {
       saExcess.push((sa.cost - exact.cost) / n);
     }
 
-    rows.push({ n, policy: median(policyExcess), sa: median(saExcess) });
+    rows.push({
+      n,
+      policy: median(policyExcess),
+      sa: median(saExcess),
+      inRange: n >= minN && n <= maxN
+    });
     await tf.nextFrame();
   }
 
-  drawScaling(rows);
+  drawScaling(rows, maxN);
 
-  const focusN = Math.min(72, Math.max(baseN, Math.round(baseN * 2)));
+  const oodRows = rows.filter(r => !r.inRange);
+  const focusRow = oodRows.length ? oodRows[oodRows.length - 1] : rows[rows.length - 1];
+  const focusN = focusRow.n;
   const target = generateInstance(focusN, mulberry32(9001));
   const exact = solveExact(target);
   const policy = solvePolicy(target);
   const sa = solveSA(target, focusN * 180, mulberry32(9002));
   drawInstance(target, exact.x, policy.x, sa.x);
 
-  const baseRow = rows.find(r => r.n === baseN) ?? rows[Math.floor(rows.length / 2)];
-  $('policyGap').textContent = fmt(baseRow.policy);
-  $('saGap').textContent = fmt(baseRow.sa);
+  $('policyGap').textContent = fmt(focusRow.policy);
+  $('saGap').textContent = fmt(focusRow.sa);
   $('policyEffort').textContent = '1';
-  $('saEffort').textContent = (baseN * 180).toLocaleString();
-  statusEl.textContent = `Done. Metrics show excess squared-error cost per variable at n=${baseRow.n}. Lower is better.`;
+  $('saEffort').textContent = (focusN * 180).toLocaleString();
+  $('metricLength').textContent = `n=${focusN} (${focusRow.inRange ? 'in-range' : 'OOD'})`;
+  statusEl.textContent = `Done. Training lengths ${minN}–${maxN}; headline metrics are at n=${focusN}. Lower gap is better.`;
 
   benchmarkBtn.disabled = false;
   trainBtn.disabled = false;
@@ -429,7 +486,7 @@ function drawLine(ctx, points, color, width = 2.4) {
   }
 }
 
-function drawScaling(rows) {
+function drawScaling(rows, trainMax) {
   const { ctx, w, h } = setupCanvas($('scalingChart'));
   const pad = 42;
   drawAxes(ctx, w, h, pad, 'chain length n', 'excess cost / variable');
@@ -439,6 +496,22 @@ function drawScaling(rows) {
   const maxN = Math.max(...rows.map(r => r.n));
   const X = n => pad + (n - minN) / Math.max(1, maxN - minN) * (w - pad - 20);
   const Y = y => h - pad - y / maxY * (h - pad - 28);
+
+  if (trainMax >= minN && trainMax <= maxN) {
+    const x = X(trainMax);
+    ctx.save();
+    ctx.setLineDash([5, 5]);
+    ctx.strokeStyle = '#7b8495';
+    ctx.beginPath();
+    ctx.moveTo(x, 16);
+    ctx.lineTo(x, h - pad);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#697386';
+    ctx.font = '11px system-ui';
+    ctx.fillText('training max', Math.min(x + 5, w - 80), 28);
+    ctx.restore();
+  }
 
   ctx.fillStyle = '#7b8495';
   ctx.font = '11px system-ui';
@@ -482,7 +555,7 @@ benchmarkBtn.addEventListener('click', () => runBenchmark().catch(err => {
 
 if (window.tf) {
   tf.ready().then(() => {
-    statusEl.textContent = `TensorFlow.js ready · backend: ${tf.getBackend()}. Train the policy to begin.`;
+    statusEl.textContent = `TensorFlow.js ready · backend: ${tf.getBackend()}. Train the multi-length policy to begin.`;
   });
 } else {
   statusEl.textContent = 'TensorFlow.js failed to load.';
