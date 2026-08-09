@@ -3,7 +3,7 @@ const VALUE_COUNT = MAX_VALUE + 1;
 let model = null;
 let trained = false;
 
-const $ = (id) => document.getElementById(id);
+const $ = id => document.getElementById(id);
 const trainN = $('trainN');
 const trainCount = $('trainCount');
 const epochs = $('epochs');
@@ -11,8 +11,8 @@ const trainBtn = $('trainBtn');
 const benchmarkBtn = $('benchmarkBtn');
 const statusEl = $('status');
 
-function bindRange(input, label) {
-  const update = () => $(label).textContent = input.value;
+function bindRange(input, labelId) {
+  const update = () => $(labelId).textContent = input.value;
   input.addEventListener('input', update);
   update();
 }
@@ -21,18 +21,16 @@ bindRange(trainCount, 'trainCountLabel');
 bindRange(epochs, 'epochsLabel');
 
 function mulberry32(seed) {
-  return function() {
+  return function () {
     let t = seed += 0x6D2B79F5;
-    t = Math.imul(t ^ t >>> 15, t | 1);
-    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
-    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
 
-function clamp(x, lo, hi) { return Math.max(lo, Math.min(hi, x)); }
+const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 
-// Customer-like recurring distribution: a descending global trend plus smooth motifs,
-// regime shifts, and noise. The oscillations create many monotonicity violations.
 function generateInstance(n, rng = Math.random) {
   const phase1 = rng() * Math.PI * 2;
   const phase2 = rng() * Math.PI * 2;
@@ -40,40 +38,41 @@ function generateInstance(n, rng = Math.random) {
   const amp2 = 4 + 10 * rng();
   const freq1 = 1 + Math.floor(rng() * 3);
   const freq2 = 3 + Math.floor(rng() * 5);
-  const top = 112 + (rng() - .5) * 8;
-  const bottom = 15 + (rng() - .5) * 8;
-  const shockAt = Math.floor(n * (.25 + .5 * rng()));
-  const shock = (rng() - .5) * 24;
+  const top = 112 + (rng() - 0.5) * 8;
+  const bottom = 15 + (rng() - 0.5) * 8;
+  const shockAt = Math.floor(n * (0.25 + 0.5 * rng()));
+  const shock = (rng() - 0.5) * 24;
   const target = new Int32Array(n);
 
   for (let i = 0; i < n; i++) {
     const u = n === 1 ? 0 : i / (n - 1);
     const trend = top * (1 - u) + bottom * u;
     const motif = amp1 * Math.sin(2 * Math.PI * freq1 * u + phase1)
-                + amp2 * Math.sin(2 * Math.PI * freq2 * u + phase2);
-    const localShock = i >= shockAt ? shock * Math.exp(-(i - shockAt) / Math.max(3, n * .18)) : 0;
-    const noise = (rng() - .5) * 7;
+      + amp2 * Math.sin(2 * Math.PI * freq2 * u + phase2);
+    const localShock = i >= shockAt
+      ? shock * Math.exp(-(i - shockAt) / Math.max(3, n * 0.18))
+      : 0;
+    const noise = (rng() - 0.5) * 7;
     target[i] = Math.round(clamp(trend + motif + localShock + noise, 0, MAX_VALUE));
   }
   return target;
 }
 
 function objective(x, target) {
-  let s = 0;
+  let sum = 0;
   for (let i = 0; i < x.length; i++) {
     const d = x[i] - target[i];
-    s += d * d;
+    sum += d * d;
   }
-  return s;
+  return sum;
 }
 
-// O(n * VALUE_COUNT) exact DP using suffix minima.
 function solveExact(target) {
   const n = target.length;
+  const INF = 1e30;
   let prev = new Float64Array(VALUE_COUNT);
   let curr = new Float64Array(VALUE_COUNT);
   const parent = new Int16Array(n * VALUE_COUNT);
-  const INF = 1e30;
 
   for (let v = 0; v < VALUE_COUNT; v++) {
     const d = v - target[0];
@@ -86,28 +85,38 @@ function solveExact(target) {
     const suffixArg = new Int16Array(VALUE_COUNT + 1);
     suffixCost[VALUE_COUNT] = INF;
     suffixArg[VALUE_COUNT] = -1;
-    let best = INF, arg = -1;
+    let best = INF;
+    let arg = -1;
+
     for (let v = VALUE_COUNT - 1; v >= 0; v--) {
-      if (prev[v] < best) { best = prev[v]; arg = v; }
+      if (prev[v] < best) {
+        best = prev[v];
+        arg = v;
+      }
       suffixCost[v] = best;
       suffixArg[v] = arg;
     }
 
     curr.fill(INF);
     for (let v = 0; v < VALUE_COUNT; v++) {
-      const u = v + 1; // previous value must be strictly larger
-      if (u >= VALUE_COUNT || suffixCost[u] >= INF / 2) continue;
+      const minPrevious = v + 1;
+      if (minPrevious >= VALUE_COUNT || suffixCost[minPrevious] >= INF / 2) continue;
       const d = v - target[i];
-      curr[v] = d * d + suffixCost[u];
-      parent[i * VALUE_COUNT + v] = suffixArg[u];
+      curr[v] = d * d + suffixCost[minPrevious];
+      parent[i * VALUE_COUNT + v] = suffixArg[minPrevious];
     }
     [prev, curr] = [curr, prev];
   }
 
-  let bestCost = INF, bestV = -1;
+  let bestCost = INF;
+  let bestV = -1;
   for (let v = 0; v < VALUE_COUNT; v++) {
-    if (prev[v] < bestCost) { bestCost = prev[v]; bestV = v; }
+    if (prev[v] < bestCost) {
+      bestCost = prev[v];
+      bestV = v;
+    }
   }
+
   const x = new Int32Array(n);
   x[n - 1] = bestV;
   for (let i = n - 1; i > 0; i--) x[i - 1] = parent[i * VALUE_COUNT + x[i]];
@@ -119,9 +128,8 @@ function greedyInitial(target) {
   const x = new Int32Array(n);
   let upper = MAX_VALUE;
   for (let i = 0; i < n; i++) {
-    const lower = n - 1 - i; // leaves enough values for the suffix
-    const hi = upper;
-    x[i] = Math.round(clamp(target[i], lower, hi));
+    const lower = n - 1 - i;
+    x[i] = Math.round(clamp(target[i], lower, upper));
     upper = x[i] - 1;
   }
   return x;
@@ -134,21 +142,22 @@ function solveSA(target, evaluations = target.length * 180, rng = Math.random) {
   let bestCost = cost;
   let best = Int32Array.from(x);
   const T0 = 160;
-  const Tend = .08;
+  const Tend = 0.08;
 
   for (let step = 0; step < evaluations; step++) {
     const i = Math.floor(rng() * n);
     const lo = i === n - 1 ? 0 : x[i + 1] + 1;
     const hi = i === 0 ? MAX_VALUE : x[i - 1] - 1;
-    if (lo > hi || lo === hi && x[i] === lo) continue;
+    if (lo > hi || (lo === hi && x[i] === lo)) continue;
 
     const old = x[i];
     let proposal;
-    if (rng() < .18) {
+    if (rng() < 0.18) {
       proposal = lo + Math.floor(rng() * (hi - lo + 1));
     } else {
       const span = Math.max(1, Math.min(10, hi - lo));
-      proposal = clamp(old + (rng() < .5 ? -1 : 1) * (1 + Math.floor(rng() * span)), lo, hi);
+      const sign = rng() < 0.5 ? -1 : 1;
+      proposal = clamp(old + sign * (1 + Math.floor(rng() * span)), lo, hi);
     }
     if (proposal === old) continue;
 
@@ -157,6 +166,7 @@ function solveSA(target, evaluations = target.length * 180, rng = Math.random) {
     const delta = newD * newD - oldD * oldD;
     const frac = step / Math.max(1, evaluations - 1);
     const temp = T0 * Math.pow(Tend / T0, frac);
+
     if (delta <= 0 || rng() < Math.exp(-delta / temp)) {
       x[i] = proposal;
       cost += delta;
@@ -190,9 +200,9 @@ function buildModel() {
   z = tf.layers.conv1d({ filters: 32, kernelSize: 5, padding: 'same', dilationRate: 2, activation: 'relu' }).apply(z);
   z = tf.layers.conv1d({ filters: 40, kernelSize: 5, padding: 'same', dilationRate: 4, activation: 'relu' }).apply(z);
   z = tf.layers.conv1d({ filters: 40, kernelSize: 3, padding: 'same', dilationRate: 8, activation: 'relu' }).apply(z);
-  const out = tf.layers.conv1d({ filters: VALUE_COUNT, kernelSize: 1, padding: 'same', activation: 'softmax' }).apply(z);
-  const m = tf.model({ inputs: input, outputs: out });
-  m.compile({ optimizer: tf.train.adam(0.002), loss: 'sparseCategoricalCrossentropy', metrics: ['accuracy'] });
+  const output = tf.layers.conv1d({ filters: VALUE_COUNT, kernelSize: 1, padding: 'same', activation: 'softmax' }).apply(z);
+  const m = tf.model({ inputs: input, outputs: output });
+  m.compile({ optimizer: tf.train.adam(0.002), loss: 'categoricalCrossentropy' });
   return m;
 }
 
@@ -204,42 +214,46 @@ async function trainPolicy() {
   const count = Number(trainCount.value);
   const ep = Number(epochs.value);
   statusEl.textContent = `Generating ${count} exact training solutions…`;
-  await new Promise(r => setTimeout(r, 20));
+  await new Promise(resolve => setTimeout(resolve, 20));
 
   const rng = mulberry32(1337);
   const instances = [];
   const labels = new Int32Array(count * n);
   for (let b = 0; b < count; b++) {
-    const t = generateInstance(n, rng);
-    const exact = solveExact(t);
-    instances.push(t);
+    const target = generateInstance(n, rng);
+    const exact = solveExact(target);
+    instances.push(target);
     labels.set(exact.x, b * n);
   }
 
   if (model) model.dispose();
   model = buildModel();
   const xs = featureTensor(instances);
-  // Conv1D emits [batch, sequence, classes]. For sparse categorical
-  // cross-entropy TensorFlow.js expects one class id per sequence position
-  // while preserving that third dimension: [batch, sequence, 1].
-  const ys = tf.tensor3d(labels, [count, n, 1], 'int32');
+  const labelIds = tf.tensor2d(labels, [count, n], 'int32');
+  const ys = tf.oneHot(labelIds, VALUE_COUNT).toFloat();
+  labelIds.dispose();
+  console.log('training shapes', { xs: xs.shape, ys: ys.shape, output: model.outputs[0].shape });
 
-  await model.fit(xs, ys, {
-    epochs: ep,
-    batchSize: 32,
-    shuffle: true,
-    validationSplit: .12,
-    callbacks: {
-      onEpochEnd: async (epoch, logs) => {
-        const loss = logs.loss?.toFixed(3) ?? '—';
-        const acc = ((logs.acc ?? logs.accuracy ?? 0) * 100).toFixed(1);
-        const val = ((logs.val_acc ?? logs.val_accuracy ?? 0) * 100).toFixed(1);
-        statusEl.textContent = `Epoch ${epoch + 1}/${ep} · loss ${loss} · train ${acc}% · validation ${val}%`;
-        await tf.nextFrame();
+  try {
+    await model.fit(xs, ys, {
+      epochs: ep,
+      batchSize: 32,
+      shuffle: true,
+      validationSplit: 0.12,
+      callbacks: {
+        onEpochEnd: async (epoch, logs) => {
+          const loss = logs.loss?.toFixed(4) ?? '—';
+          const valLoss = logs.val_loss?.toFixed(4) ?? '—';
+          statusEl.textContent = `Epoch ${epoch + 1}/${ep} · loss ${loss} · validation ${valLoss}`;
+          await tf.nextFrame();
+        }
       }
-    }
-  });
-  xs.dispose(); ys.dispose();
+    });
+  } finally {
+    xs.dispose();
+    ys.dispose();
+  }
+
   trained = true;
   benchmarkBtn.disabled = false;
   trainBtn.disabled = false;
@@ -254,27 +268,34 @@ function solvePolicy(target) {
   const probs = pred.dataSync();
   const n = target.length;
   const x = new Int32Array(n);
-  let prev = VALUE_COUNT;
+  let previous = VALUE_COUNT;
+
   for (let i = 0; i < n; i++) {
     const lo = n - 1 - i;
-    const hi = Math.min(MAX_VALUE, prev - 1);
-    let bestV = lo, bestP = -1;
+    const hi = Math.min(MAX_VALUE, previous - 1);
+    let bestV = lo;
+    let bestP = -1;
     const offset = i * VALUE_COUNT;
     for (let v = lo; v <= hi; v++) {
       const p = probs[offset + v];
-      if (p > bestP) { bestP = p; bestV = v; }
+      if (p > bestP) {
+        bestP = p;
+        bestV = v;
+      }
     }
     x[i] = bestV;
-    prev = bestV;
+    previous = bestV;
   }
-  xs.dispose(); pred.dispose();
+
+  xs.dispose();
+  pred.dispose();
   return { x, cost: objective(x, target), evaluations: 1 };
 }
 
 function median(values) {
   const a = [...values].sort((x, y) => x - y);
-  const m = Math.floor(a.length / 2);
-  return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+  const mid = Math.floor(a.length / 2);
+  return a.length % 2 ? a[mid] : (a[mid - 1] + a[mid]) / 2;
 }
 
 function fmt(x) {
@@ -301,7 +322,8 @@ async function runBenchmark() {
   for (let li = 0; li < lengths.length; li++) {
     const n = lengths[li];
     statusEl.textContent = `Benchmarking n=${n} (${li + 1}/${lengths.length})…`;
-    const policyExcess = [], saExcess = [];
+    const policyExcess = [];
+    const saExcess = [];
     for (let r = 0; r < 8; r++) {
       const target = generateInstance(n, rng);
       const exact = solveExact(target);
@@ -336,7 +358,7 @@ function setupCanvas(canvas) {
   const dpr = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();
   canvas.width = Math.max(300, Math.floor(rect.width * dpr));
-  canvas.height = Math.floor(Math.max(260, rect.width * .46) * dpr);
+  canvas.height = Math.floor(Math.max(260, rect.width * 0.46) * dpr);
   const ctx = canvas.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   return { ctx, w: canvas.width / dpr, h: canvas.height / dpr };
@@ -344,20 +366,34 @@ function setupCanvas(canvas) {
 
 function drawAxes(ctx, w, h, pad, xLabel, yLabel) {
   ctx.clearRect(0, 0, w, h);
-  ctx.strokeStyle = '#dbe1eb'; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(pad, 14); ctx.lineTo(pad, h - pad); ctx.lineTo(w - 12, h - pad); ctx.stroke();
-  ctx.fillStyle = '#697386'; ctx.font = '12px system-ui';
+  ctx.strokeStyle = '#dbe1eb';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(pad, 14);
+  ctx.lineTo(pad, h - pad);
+  ctx.lineTo(w - 12, h - pad);
+  ctx.stroke();
+  ctx.fillStyle = '#697386';
+  ctx.font = '12px system-ui';
   ctx.fillText(yLabel, pad + 6, 24);
-  ctx.textAlign = 'right'; ctx.fillText(xLabel, w - 12, h - 10); ctx.textAlign = 'left';
+  ctx.textAlign = 'right';
+  ctx.fillText(xLabel, w - 12, h - 10);
+  ctx.textAlign = 'left';
 }
 
-function line(ctx, pts, color, width = 2.4) {
-  if (!pts.length) return;
-  ctx.strokeStyle = color; ctx.lineWidth = width; ctx.beginPath();
-  pts.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]));
+function drawLine(ctx, points, color, width = 2.4) {
+  if (!points.length) return;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.beginPath();
+  points.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]));
   ctx.stroke();
   ctx.fillStyle = color;
-  for (const p of pts) { ctx.beginPath(); ctx.arc(p[0], p[1], 2.8, 0, Math.PI * 2); ctx.fill(); }
+  for (const p of points) {
+    ctx.beginPath();
+    ctx.arc(p[0], p[1], 2.8, 0, Math.PI * 2);
+    ctx.fill();
+  }
 }
 
 function drawScaling(rows) {
@@ -365,14 +401,19 @@ function drawScaling(rows) {
   const pad = 42;
   drawAxes(ctx, w, h, pad, 'chain length n', 'excess cost / variable');
   const maxY = Math.max(1, ...rows.flatMap(r => [r.policy, r.sa])) * 1.12;
-  const minN = Math.min(...rows.map(r => r.n)), maxN = Math.max(...rows.map(r => r.n));
+  const minN = Math.min(...rows.map(r => r.n));
+  const maxN = Math.max(...rows.map(r => r.n));
   const X = n => pad + (n - minN) / Math.max(1, maxN - minN) * (w - pad - 20);
   const Y = y => h - pad - y / maxY * (h - pad - 28);
-  ctx.fillStyle = '#7b8495'; ctx.font = '11px system-ui';
-  for (const r of rows) { const x = X(r.n); ctx.fillText(String(r.n), x - 6, h - pad + 17); }
-  for (let k = 0; k <= 4; k++) { const yv = maxY * k / 4; const y = Y(yv); ctx.fillText(fmt(yv), 4, y + 4); }
-  line(ctx, rows.map(r => [X(r.n), Y(r.policy)]), '#5b67d6');
-  line(ctx, rows.map(r => [X(r.n), Y(r.sa)]), '#dd6b55');
+  ctx.fillStyle = '#7b8495';
+  ctx.font = '11px system-ui';
+  for (const row of rows) ctx.fillText(String(row.n), X(row.n) - 6, h - pad + 17);
+  for (let k = 0; k <= 4; k++) {
+    const yv = maxY * k / 4;
+    ctx.fillText(fmt(yv), 4, Y(yv) + 4);
+  }
+  drawLine(ctx, rows.map(r => [X(r.n), Y(r.policy)]), '#5b67d6');
+  drawLine(ctx, rows.map(r => [X(r.n), Y(r.sa)]), '#dd6b55');
 }
 
 function drawInstance(target, exact, policy, sa) {
@@ -382,10 +423,10 @@ function drawInstance(target, exact, policy, sa) {
   const n = target.length;
   const X = i => pad + i / Math.max(1, n - 1) * (w - pad - 20);
   const Y = v => h - pad - v / MAX_VALUE * (h - pad - 28);
-  line(ctx, Array.from(target, (v, i) => [X(i), Y(v)]), '#9aa4b8', 1.5);
-  line(ctx, Array.from(exact, (v, i) => [X(i), Y(v)]), '#2e8b72', 2.5);
-  line(ctx, Array.from(policy, (v, i) => [X(i), Y(v)]), '#5b67d6', 2.2);
-  line(ctx, Array.from(sa, (v, i) => [X(i), Y(v)]), '#dd6b55', 2.0);
+  drawLine(ctx, Array.from(target, (v, i) => [X(i), Y(v)]), '#9aa4b8', 1.5);
+  drawLine(ctx, Array.from(exact, (v, i) => [X(i), Y(v)]), '#2e8b72', 2.5);
+  drawLine(ctx, Array.from(policy, (v, i) => [X(i), Y(v)]), '#5b67d6', 2.2);
+  drawLine(ctx, Array.from(sa, (v, i) => [X(i), Y(v)]), '#dd6b55', 2.0);
 }
 
 trainBtn.addEventListener('click', () => trainPolicy().catch(err => {
@@ -393,15 +434,13 @@ trainBtn.addEventListener('click', () => trainPolicy().catch(err => {
   statusEl.textContent = `Error: ${err.message}`;
   trainBtn.disabled = false;
 }));
+
 benchmarkBtn.addEventListener('click', () => runBenchmark().catch(err => {
   console.error(err);
   statusEl.textContent = `Error: ${err.message}`;
-  trainBtn.disabled = false; benchmarkBtn.disabled = false;
+  trainBtn.disabled = false;
+  benchmarkBtn.disabled = false;
 }));
-
-window.addEventListener('resize', () => {
-  // Charts are redrawn on the next benchmark; avoid retaining large benchmark data globally.
-});
 
 if (window.tf) {
   tf.ready().then(() => {
