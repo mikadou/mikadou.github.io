@@ -219,7 +219,10 @@ async function trainPolicy() {
   if (model) model.dispose();
   model = buildModel();
   const xs = featureTensor(instances);
-  const ys = tf.tensor2d(labels, [count, n], 'int32');
+  // Conv1D emits [batch, sequence, classes]. For sparse categorical
+  // cross-entropy TensorFlow.js expects one class id per sequence position
+  // while preserving that third dimension: [batch, sequence, 1].
+  const ys = tf.tensor3d(labels, [count, n, 1], 'int32');
 
   await model.fit(xs, ys, {
     epochs: ep,
