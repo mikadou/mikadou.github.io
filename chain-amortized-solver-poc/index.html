@@ -38,7 +38,7 @@
     <section class="metrics">
       <article class="metric"><span>GNN solve rate</span><strong id="policySuccess">—</strong><small>at longest test length</small></article>
       <article class="metric"><span>SA solve rate</span><strong id="saSuccess">—</strong><small>at longest test length</small></article>
-      <article class="metric"><span>GNN proposals</span><strong id="policyMoves">—</strong><small>median when solved</small></article>
+      <article class="metric"><span>GNN choices</span><strong id="policyMoves">—</strong><small>exactly one per variable</small></article>
       <article class="metric"><span>SA effort</span><strong id="saEffort">—</strong><small>proposals / trial</small></article>
     </section>
     <p class="status">Headline benchmark: <strong id="metricLength">—</strong></p>
@@ -52,7 +52,7 @@
       </article>
       <article class="card">
         <h2>Longest held-out chain</h2>
-        <p>Blue is the feasible assignment constructed interactively by the GNN; orange is simulated annealing after its search budget. Any strictly increasing curve inside <code>0…1000</code> is a valid solution.</p>
+        <p>Blue is the assignment produced by the GNN in exactly <code>n</code> open-loop joint choices; orange is simulated annealing after its search budget. Any strictly increasing curve inside <code>0…1000</code> is a valid solution.</p>
         <canvas id="instanceChart" width="760" height="360"></canvas>
         <div class="legend"><span><i class="dot policy"></i> GNN policy</span><span><i class="dot sa"></i> SA</span></div>
       </article>
@@ -80,23 +80,23 @@
         <div>
           <h3>Joint <code>(i,v)</code> action</h3>
           <p>The action head combines the GNN embedding of an unassigned variable <code>Vᵢ</code> with candidate value <code>v/1000</code>, then returns one scalar score. The policy therefore chooses both which variable to fix and which integer value to give it.</p>
-          <p>During training, greedy exploration scores a sampled set of joint actions; evaluation can score the full <code>n × 1001</code> action space.</p>
+          <p>During training, greedy exploration scores a sampled set of joint actions; evaluation scores the full <code>n × 1001</code> action space.</p>
         </div>
         <div>
           <h3>Feasibility only</h3>
-          <p>After a proposal <code>xᵢ=v</code>, a generic bound propagator checks the domains <code>0…1000</code> and all <code>&gt;</code> constraints together with assignments already made. Reward is <code>+1</code> if a completion still exists and <code>−1</code> if the proposal makes the partial assignment impossible.</p>
-          <p>Accepted actions become part of the graph state and the episode continues until every variable is assigned. There is no objective, no target assignment, and no reward for following a linear formula.</p>
+          <p>During training, after a proposal <code>xᵢ=v</code>, a generic bound propagator checks the domains <code>0…1000</code> and all <code>&gt;</code> constraints together with assignments already made. Reward is <code>+1</code> if a completion still exists and <code>−1</code> if the proposal makes the partial assignment impossible.</p>
+          <p>Accepted actions become part of the training state. There is no objective, no target assignment, and no reward for following a linear formula.</p>
         </div>
       </div>
     </section>
 
     <section class="card explanation">
-      <h2>What we expect it to discover</h2>
-      <p>The feasible set is now deliberately broad. A simple reusable family is <code>xᵢ=k·i</code>, but the agent is free to discover any strictly increasing construction. The experiment is successful if it learns to build feasible long chains with few rejected proposals and generalizes beyond the graph sizes seen in training.</p>
+      <h2>Open-loop evaluation</h2>
+      <p>The feasibility propagator is not allowed to repair evaluation decisions. The trained GNN makes exactly one joint choice for each variable; after the complete assignment is produced, the benchmark simply checks whether it is strictly increasing. A family such as <code>xᵢ=k·i</code> is an easy reusable strategy, but the policy is free to discover any feasible monotone construction.</p>
     </section>
 
     <footer>Everything runs locally in your browser. No training data or model state is uploaded.</footer>
   </main>
-  <script type="module" src="app-gnn-feasible.js?v=20260809-12"></script>
+  <script type="module" src="app-gnn-feasible.js?v=20260809-13"></script>
 </body>
 </html>
