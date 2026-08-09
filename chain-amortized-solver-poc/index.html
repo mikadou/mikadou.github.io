@@ -3,16 +3,16 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>RL Chain Solver PoC</title>
+  <title>GNN RL Chain Solver PoC</title>
   <link rel="stylesheet" href="styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
 </head>
 <body>
   <main>
     <header>
-      <p class="eyebrow">Proof of concept · reinforcement learning</p>
-      <h1>Can RL discover that node ID is the solution?</h1>
-      <p class="lede">For <code>n</code> integer variables in <code>0…n−1</code>, the only assignment satisfying <code>x₀ &lt; x₁ &lt; … &lt; xₙ₋₁</code> is <code>xᵢ=i</code>. The network is never given that solution. It chooses the complete joint action <code>(i,v)</code> and learns only from reward returned by generic monotonic constraint propagation.</p>
+      <p class="eyebrow">Proof of concept · typed GNN + reinforcement learning</p>
+      <h1>Can a factor-graph GNN discover the chain rule?</h1>
+      <p class="lede">The optimization model is now represented explicitly as a bipartite graph: variable nodes and <code>&gt;</code> constraint nodes connected by typed operand edges. The GNN receives normalized node IDs, passes messages through the constraint graph, and still chooses the complete joint action <code>(i,v)</code>. It never receives the solution as a label.</p>
     </header>
 
     <section class="card controls">
@@ -29,16 +29,16 @@
         <input id="episodes" type="range" min="100" max="3000" step="100" value="600" />
       </div>
       <div class="buttons">
-        <button id="trainBtn">Train RL agent</button>
+        <button id="trainBtn">Train typed GNN</button>
         <button id="benchmarkBtn" class="secondary" disabled>Run benchmark</button>
       </div>
       <div id="status" class="status">TensorFlow.js is loading…</div>
     </section>
 
     <section class="metrics">
-      <article class="metric"><span>Policy solve rate</span><strong id="policySuccess">—</strong><small>at longest test length</small></article>
+      <article class="metric"><span>GNN solve rate</span><strong id="policySuccess">—</strong><small>at longest test length</small></article>
       <article class="metric"><span>SA solve rate</span><strong id="saSuccess">—</strong><small>at longest test length</small></article>
-      <article class="metric"><span>Policy moves</span><strong id="policyMoves">—</strong><small>joint choices to construct solution</small></article>
+      <article class="metric"><span>GNN moves</span><strong id="policyMoves">—</strong><small>joint choices to construct solution</small></article>
       <article class="metric"><span>SA effort</span><strong id="saEffort">—</strong><small>swap proposals / trial</small></article>
     </section>
     <p class="status">Headline benchmark: <strong id="metricLength">—</strong></p>
@@ -46,43 +46,58 @@
     <section class="grid two">
       <article class="card">
         <h2>Size generalization</h2>
-        <p>The dashed line marks the largest chain length seen during training. To the right, the same shared <code>(i,v)</code> scorer is applied without retraining. Higher solve rate is better.</p>
+        <p>The dashed line marks the largest graph size seen during training. To the right, the same message-passing weights and action head are reused on larger factor graphs without retraining.</p>
         <canvas id="scalingChart" width="760" height="360"></canvas>
-        <div class="legend"><span><i class="dot policy"></i> learned RL policy</span><span><i class="dot sa"></i> simulated annealing</span></div>
+        <div class="legend"><span><i class="dot policy"></i> typed GNN RL policy</span><span><i class="dot sa"></i> simulated annealing</span></div>
       </article>
       <article class="card">
         <h2>Longest held-out chain</h2>
-        <p>The green diagonal is the unique feasible assignment <code>xᵢ=i</code>. Blue is the complete assignment built from the learned joint-action scores; orange is SA after its search budget.</p>
+        <p>The green diagonal is the unique feasible assignment <code>xᵢ=i</code>. Blue is the complete assignment assembled from the GNN's joint <code>(i,v)</code> scores; orange is SA after its search budget.</p>
         <canvas id="instanceChart" width="760" height="360"></canvas>
-        <div class="legend"><span><i class="dot exact"></i> unique feasible solution</span><span><i class="dot policy"></i> RL policy</span><span><i class="dot sa"></i> SA</span></div>
+        <div class="legend"><span><i class="dot exact"></i> unique feasible solution</span><span><i class="dot policy"></i> GNN policy</span><span><i class="dot sa"></i> SA</span></div>
       </article>
     </section>
 
     <section class="card explanation">
-      <h2>What is actually being learned</h2>
+      <h2>Graph representation</h2>
       <div class="grid two text-grid">
         <div>
-          <h3>Joint action choice</h3>
-          <p>The agent never receives a fixed variable order. A shared MLP scores every pair <code>(i,v)</code>: which variable to choose and which value to assign. Its only numeric inputs are normalized node ID and normalized candidate value.</p>
-          <p>At deployment the policy repeatedly chooses the highest-scoring remaining node/value pair, so a learned identity relation produces a full solution in exactly <code>n</code> joint choices.</p>
+          <h3>Two node types</h3>
+          <p><strong>Variable nodes</strong> <code>Vᵢ</code> represent <code>xᵢ</code>. Their initial features are node type plus normalized semantic ID <code>i/(n−1)</code>.</p>
+          <p><strong>Constraint nodes</strong> <code>Gₖ</code> represent <code>xₖ₊₁ &gt; xₖ</code>. They also receive a node-type bit and normalized constraint ID. For a chain of length <code>n</code>, the graph therefore contains <code>n</code> variable nodes and <code>n−1</code> constraint nodes.</p>
         </div>
         <div>
-          <h3>RL, not supervised learning</h3>
-          <p>There are no exact-solution labels. Each exploratory action fixes one variable, then a tiny generic bound propagator enforces the strict monotonic constraints and domains. The agent receives <code>+1</code> if the partial assignment is still feasible and <code>−1</code> if propagation proves a contradiction.</p>
-          <p>This is a contextual-bandit RL problem: immediate feedback is enough, so there is no noisy multi-step credit assignment. ε-greedy exploration collects experience, and balanced replay prevents the rarer positive actions from being drowned out by negative ones.</p>
+          <h3>Four typed edge directions</h3>
+          <p>Operand role is explicit: <code>smaller-variable → constraint</code>, <code>greater-variable → constraint</code>, plus the two reverse directions <code>constraint → smaller-variable</code> and <code>constraint → greater-variable</code>.</p>
+          <p>Each edge type has its own learned message matrix. Four rounds of residual message passing produce the final embedding for every variable and constraint node.</p>
         </div>
       </div>
     </section>
 
     <section class="card explanation">
-      <h2>Why the solution is unique</h2>
-      <p>There are exactly <code>n</code> variables and each value must lie in <code>0…n−1</code>. A strictly increasing sequence of <code>n</code> integers from a set containing only <code>n</code> integers must therefore use every value exactly once and in order:</p>
-      <p><code>x₀=0, x₁=1, …, xₙ₋₁=n−1</code>.</p>
-      <p>The environment contains only domains plus monotonic constraints. The identity rule is never inserted as a training label; it is the relation that survives propagation.</p>
+      <h2>Action head and RL signal</h2>
+      <div class="grid two text-grid">
+        <div>
+          <h3>Joint <code>(i,v)</code> action</h3>
+          <p>The action head receives the final GNN embedding of variable node <code>Vᵢ</code> together with normalized candidate value <code>v/(n−1)</code>, then returns one scalar action score. Every possible pair is scored, so the network still chooses both which variable and which value.</p>
+          <p>The same GNN and action-head parameters are reused at every chain length; only the number of graph nodes and candidate actions changes.</p>
+        </div>
+        <div>
+          <h3>RL, not supervised learning</h3>
+          <p>There are no exact-solution labels. An exploratory action fixes <code>xᵢ=v</code>, then generic bound propagation evaluates the graph constraints. Reward is <code>+1</code> if the partial assignment remains feasible and <code>−1</code> if propagation proves a contradiction.</p>
+          <p>Training remains contextual-bandit RL with ε-greedy exploration and balanced positive/negative replay. The only route from node identity to action value is through the learned GNN representation.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="card explanation">
+      <h2>Why this should still be easy</h2>
+      <p>There are exactly <code>n</code> variables, each with domain <code>0…n−1</code>, and the constraints require a strictly increasing chain. Therefore the unique feasible assignment is <code>x₀=0, x₁=1, …, xₙ₋₁=n−1</code>.</p>
+      <p>The normalized variable-node ID exposes a simple reusable pattern, while the factor graph now makes the constraint structure explicit. If this version fails, that is evidence about the message-passing/training setup rather than the difficulty of the underlying optimization rule.</p>
     </section>
 
     <footer>Everything runs locally in your browser. No training data or model state is uploaded.</footer>
   </main>
-  <script type="module" src="app-bandit.js?v=20260809-10"></script>
+  <script type="module" src="app-gnn.js?v=20260809-11"></script>
 </body>
 </html>
