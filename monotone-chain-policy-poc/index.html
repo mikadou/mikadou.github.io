@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Monotone Chain Learned Solver PoC</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="shell">
+    <header class="hero">
+      <div>
+        <div class="eyebrow">Learned optimization · PoC 1</div>
+        <h1>Can a policy learn the structure that generic search misses?</h1>
+        <p>
+          We solve integer chains <code>x₀ &gt; x₁ &gt; … &gt; xₙ₋₁</code> with a structured non-convex target cost.
+          A tiny shared neural policy chooses every variable value itself. Exact dynamic programming is used only as a training teacher and evaluation oracle.
+        </p>
+      </div>
+      <div class="hypothesis">
+        <span>Hypothesis</span>
+        <strong>Amortized structure beats generic local search as the chain grows.</strong>
+      </div>
+    </header>
+
+    <section class="card controls-card">
+      <div class="control-grid">
+        <label>
+          Training instances
+          <input id="trainCount" type="number" min="100" max="5000" step="100" value="700" />
+        </label>
+        <label>
+          Training n range
+          <div class="inline-inputs">
+            <input id="trainMin" type="number" min="8" max="64" value="16" />
+            <span>to</span>
+            <input id="trainMax" type="number" min="16" max="96" value="64" />
+          </div>
+        </label>
+        <label>
+          Epochs
+          <input id="epochs" type="number" min="1" max="30" value="8" />
+        </label>
+        <label>
+          SA evaluations / variable
+          <input id="saMultiplier" type="number" min="5" max="500" step="5" value="50" />
+        </label>
+      </div>
+      <div class="actions">
+        <button id="trainBtn" class="primary">Train policy</button>
+        <button id="benchmarkBtn" disabled>Run scaling benchmark</button>
+        <button id="sampleBtn" disabled>New sample</button>
+      </div>
+      <div class="status-wrap">
+        <div id="status">Ready.</div>
+        <div class="progress"><div id="progressBar"></div></div>
+      </div>
+    </section>
+
+    <section class="stats-grid">
+      <article class="stat card">
+        <span>Policy architecture</span>
+        <strong>14 → 32 → 16 → 1</strong>
+        <small>Shared MLP, autoregressive over variables</small>
+      </article>
+      <article class="stat card">
+        <span>Policy decisions</span>
+        <strong>n</strong>
+        <small>One predicted value per variable</small>
+      </article>
+      <article class="stat card">
+        <span>Constraint handling</span>
+        <strong>Mask only</strong>
+        <small>No CP, MCTS, LNS, or solver at inference</small>
+      </article>
+      <article class="stat card">
+        <span>Teacher</span>
+        <strong>Exact DP</strong>
+        <small>Used only during imitation training / evaluation</small>
+      </article>
+    </section>
+
+    <section class="card">
+      <div class="section-head">
+        <div>
+          <div class="eyebrow">Scaling experiment</div>
+          <h2>Mean excess cost per variable</h2>
+        </div>
+        <p>Lower is better. The chart uses log₁₀(excess + 1). SA receives many more candidate evaluations than the policy receives decisions.</p>
+      </div>
+      <canvas id="benchmarkChart" width="1100" height="430"></canvas>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>n</th>
+              <th>Policy</th>
+              <th>Greedy</th>
+              <th>SA (single)</th>
+              <th>SA (block)</th>
+              <th>Policy moves</th>
+              <th>SA evals</th>
+            </tr>
+          </thead>
+          <tbody id="resultsBody"><tr><td colspan="7" class="muted">Train the policy, then run the benchmark.</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="section-head sample-head">
+        <div>
+          <div class="eyebrow">Single unseen instance</div>
+          <h2>What the solvers actually construct</h2>
+        </div>
+        <label class="sample-size">
+          Chain length n
+          <input id="sampleN" type="range" min="16" max="128" step="8" value="96" />
+          <output id="sampleNOut">96</output>
+        </label>
+      </div>
+      <canvas id="sampleChart" width="1100" height="470"></canvas>
+      <div id="sampleMetrics" class="metric-row muted">Train the policy to inspect a sample.</div>
+    </section>
+
+    <section class="card notes">
+      <div>
+        <h2>What this PoC does — and does not — prove</h2>
+        <p>
+          The learned policy is trained by imitation from exact solutions. This first experiment asks whether a compact shared network can internalize a recurring structural heuristic and amortize it across unseen instances. It is intentionally <em>not</em> an RL experiment yet.
+        </p>
+      </div>
+      <ul>
+        <li><strong>Policy:</strong> predicts each next integer value, then the environment clips it to the legal interval implied by the chain.</li>
+        <li><strong>Greedy:</strong> picks the legal value closest to the current local target.</li>
+        <li><strong>SA single:</strong> traditional single-variable feasible mutations.</li>
+        <li><strong>SA block:</strong> a stronger baseline that shifts random contiguous blocks.</li>
+        <li><strong>Exact DP:</strong> establishes the global optimum and creates teacher trajectories; it is never called by the policy at inference.</li>
+      </ul>
+    </section>
+  </main>
+
+  <script src="solver.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
