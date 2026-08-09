@@ -1,43 +1,79 @@
-# Amortized chain solver PoC
+# RL chain solver PoC
 
-Browser-only proof of concept for the hypothesis that a learned policy can amortize recurring optimization structure across instances and generalize that structure to larger problem sizes.
+Browser-only proof of concept for the hypothesis that a learned optimizer can discover and amortize a simple recurring optimization rule using reinforcement learning rather than supervised labels.
 
 ## Problem
 
-For integer variables `x[0..n-1]` in `0..127`, solve
+For `n` integer variables with domains `0..n-1`, satisfy the monotonic constraints
 
 ```text
-x[0] > x[1] > ... > x[n-1]
+x[0] < x[1] < ... < x[n-1]
 ```
 
-while minimizing squared distance to an instance-specific target sequence:
+Because there are exactly `n` variables and exactly `n` available integer values, there is only one feasible assignment:
 
 ```text
-sum_i (x[i] - target[i])^2
+x[i] = i
 ```
 
-The target generator has a recurring distribution (global trend, smooth motifs, regime shocks, and noise), producing many local violations of the monotone constraint.
+The RL agent is never shown that assignment as a label.
 
-## Solvers
+## RL action space
 
-- **Exact DP oracle:** `O(n * 128)`, using suffix minima. Used for labels and evaluation only.
-- **Learned policy:** TensorFlow.js bidirectional GRU with per-position value logits. It sees target value plus relative position, but no explicit chain-length feature. A minimal feasibility decoder masks values that make a strict descending completion impossible.
-- **Simulated annealing:** starts from a feasible greedy chain, proposes only feasible single-variable changes, and uses a geometric temperature schedule. It receives no information from previous instances.
+The network chooses both parts of every move:
 
-## Experiment
+```text
+(i, v)
+```
 
-The first version trained at one fixed length and used a finite-receptive-field CNN. That policy mostly won only at the exact training length, which is evidence of length-specific specialization rather than algorithmic generalization.
+meaning “assign variable `i` the value `v`.” There is no fixed variable order.
 
-The current version instead:
+A small shared MLP scores every candidate `(i,v)` pair. The same scorer is reused for every node, value, and chain length, avoiding a fixed-size output head and making size extrapolation possible.
 
-1. trains on a range of lengths (default `12..32`, every fourth length),
-2. generates fresh oracle-labeled instances every epoch,
-3. uses a bidirectional GRU so the same recurrent computation can run for unseen sequence lengths,
-4. removes the raw chain-length input feature, and
-5. benchmarks both inside the training range and at lengths up to roughly `3x` the training maximum (capped at 120 because values are `0..127`).
+## State/action features
 
-The main metric is excess objective cost per variable over the exact optimum, plus search effort: one policy inference versus thousands of SA objective evaluations.
+The scorer receives normalized structural features for the candidate action, including:
 
-This is still intentionally **PoC A**: imitation learning tests whether a reusable neural solver can represent and extrapolate a structural heuristic. A later experiment should remove oracle supervision during training and learn from objective feedback/self-improvement.
+- node id `i`,
+- candidate value `v`,
+- current value of node `i`,
+- neighboring current values,
+- whether the node is at a boundary,
+- fractions of violated predecessor/successor ordering constraints, and
+- proposed value change.
+
+No exact solution or oracle value appears in training data.
+
+## Reward
+
+Episodes start from random permutations. For denser feedback, the environment counts violated implied monotonic orderings
+
+```text
+i < j  =>  x[i] < x[j]
+```
+
+which are the transitive closure of the chain constraints. Reward is based on the reduction in that violation count, with a small move cost and a terminal bonus when all constraints are satisfied.
+
+## RL algorithm
+
+The current implementation uses approximate Monte-Carlo action-value learning with replay and epsilon-greedy control:
+
+- epsilon starts near `0.90` and decays toward `0.04`,
+- complete episode returns are regressed onto the chosen action features,
+- a replay buffer mixes recent experience,
+- a curriculum gradually expands from short chains to the selected maximum training length.
+
+This is RL/self-discovery rather than imitation learning.
+
+## Benchmark
+
+Default training range: `n=6..20`.
+
+The benchmark evaluates both inside and well outside that range, up to `n=100`, comparing:
+
+- learned greedy policy with at most `2n` joint `(i,v)` moves,
+- simulated annealing with `100n` random proposals.
+
+The main metric is solve rate versus chain length. A second chart shows the random starting permutation, the unique `x[i]=i` solution, the learned policy result, and the SA result on the longest held-out chain.
 
 Open the GitHub Pages deployment at `/chain-amortized-solver-poc/`.
