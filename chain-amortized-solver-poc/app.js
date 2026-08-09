@@ -31,6 +31,9 @@ function mulberry32(seed) {
 
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 
+// Structured recurring instance family: a descending global trend with smooth
+// motifs, a local regime shift, and noise. The raw target often violates the
+// monotonic chain, so a solver must coordinate many positions.
 function generateInstance(n, rng = Math.random) {
   const phase1 = rng() * Math.PI * 2;
   const phase2 = rng() * Math.PI * 2;
@@ -67,6 +70,7 @@ function objective(x, target) {
   return sum;
 }
 
+// Exact O(n * VALUE_COUNT) dynamic program for x[i-1] > x[i].
 function solveExact(target) {
   const n = target.length;
   const INF = 1e30;
@@ -135,6 +139,7 @@ function greedyInitial(target) {
   return x;
 }
 
+// Generic SA baseline: feasible single-variable moves only.
 function solveSA(target, evaluations = target.length * 180, rng = Math.random) {
   const n = target.length;
   const x = greedyInitial(target);
@@ -196,13 +201,26 @@ function featureTensor(instances) {
 
 function buildModel() {
   const input = tf.input({ shape: [null, 3] });
-  let z = tf.layers.conv1d({ filters: 32, kernelSize: 5, padding: 'same', activation: 'relu' }).apply(input);
-  z = tf.layers.conv1d({ filters: 32, kernelSize: 5, padding: 'same', dilationRate: 2, activation: 'relu' }).apply(z);
-  z = tf.layers.conv1d({ filters: 40, kernelSize: 5, padding: 'same', dilationRate: 4, activation: 'relu' }).apply(z);
-  z = tf.layers.conv1d({ filters: 40, kernelSize: 3, padding: 'same', dilationRate: 8, activation: 'relu' }).apply(z);
-  const output = tf.layers.conv1d({ filters: VALUE_COUNT, kernelSize: 1, padding: 'same', activation: 'softmax' }).apply(z);
+
+  // Keep dilationRate=1 throughout. tfjs' browser Conv2D gradient kernel (used
+  // under the hood by Conv1D) cannot train dilated convolutions. Stacking wide
+  // ordinary convolutions gives a large receptive field while remaining fully
+  // differentiable in WebGL/WASM/CPU backends.
+  let z = tf.layers.conv1d({ filters: 40, kernelSize: 9, padding: 'same', activation: 'relu' }).apply(input);
+  z = tf.layers.conv1d({ filters: 48, kernelSize: 9, padding: 'same', activation: 'relu' }).apply(z);
+  z = tf.layers.conv1d({ filters: 48, kernelSize: 9, padding: 'same', activation: 'relu' }).apply(z);
+  z = tf.layers.conv1d({ filters: 48, kernelSize: 9, padding: 'same', activation: 'relu' }).apply(z);
+  z = tf.layers.conv1d({ filters: 40, kernelSize: 9, padding: 'same', activation: 'relu' }).apply(z);
+
+  const output = tf.layers.conv1d({
+    filters: VALUE_COUNT,
+    kernelSize: 1,
+    padding: 'same',
+    activation: 'softmax'
+  }).apply(z);
+
   const m = tf.model({ inputs: input, outputs: output });
-  m.compile({ optimizer: tf.train.adam(0.002), loss: 'categoricalCrossentropy' });
+  m.compile({ optimizer: tf.train.adam(0.0015), loss: 'categoricalCrossentropy' });
   return m;
 }
 
@@ -210,6 +228,7 @@ async function trainPolicy() {
   if (!window.tf) throw new Error('TensorFlow.js did not load.');
   trainBtn.disabled = true;
   benchmarkBtn.disabled = true;
+
   const n = Number(trainN.value);
   const count = Number(trainCount.value);
   const ep = Number(epochs.value);
@@ -232,7 +251,13 @@ async function trainPolicy() {
   const labelIds = tf.tensor2d(labels, [count, n], 'int32');
   const ys = tf.oneHot(labelIds, VALUE_COUNT).toFloat();
   labelIds.dispose();
-  console.log('training shapes', { xs: xs.shape, ys: ys.shape, output: model.outputs[0].shape });
+
+  console.log('training shapes', {
+    xs: xs.shape,
+    ys: ys.shape,
+    output: model.outputs[0].shape,
+    backend: tf.getBackend()
+  });
 
   try {
     await model.fit(xs, ys, {
@@ -270,6 +295,8 @@ function solvePolicy(target) {
   const x = new Int32Array(n);
   let previous = VALUE_COUNT;
 
+  // Greedy feasibility-aware decoding. This is deliberately tiny: all learned
+  // structural knowledge must be present in the network logits.
   for (let i = 0; i < n; i++) {
     const lo = n - 1 - i;
     const hi = Math.min(MAX_VALUE, previous - 1);
@@ -308,6 +335,7 @@ async function runBenchmark() {
   if (!trained) return;
   benchmarkBtn.disabled = true;
   trainBtn.disabled = true;
+
   const baseN = Number(trainN.value);
   const lengths = [...new Set([
     Math.max(12, Math.round(baseN / 2)),
@@ -316,6 +344,7 @@ async function runBenchmark() {
     Math.min(72, baseN * 2),
     72
   ])].sort((a, b) => a - b).filter(n => n <= 72);
+
   const rng = mulberry32(20260809);
   const rows = [];
 
@@ -324,6 +353,7 @@ async function runBenchmark() {
     statusEl.textContent = `Benchmarking n=${n} (${li + 1}/${lengths.length})…`;
     const policyExcess = [];
     const saExcess = [];
+
     for (let r = 0; r < 8; r++) {
       const target = generateInstance(n, rng);
       const exact = solveExact(target);
@@ -332,11 +362,13 @@ async function runBenchmark() {
       policyExcess.push((policy.cost - exact.cost) / n);
       saExcess.push((sa.cost - exact.cost) / n);
     }
+
     rows.push({ n, policy: median(policyExcess), sa: median(saExcess) });
     await tf.nextFrame();
   }
 
   drawScaling(rows);
+
   const focusN = Math.min(72, Math.max(baseN, Math.round(baseN * 2)));
   const target = generateInstance(focusN, mulberry32(9001));
   const exact = solveExact(target);
@@ -350,6 +382,7 @@ async function runBenchmark() {
   $('policyEffort').textContent = '1';
   $('saEffort').textContent = (baseN * 180).toLocaleString();
   statusEl.textContent = `Done. Metrics show excess squared-error cost per variable at n=${baseRow.n}. Lower is better.`;
+
   benchmarkBtn.disabled = false;
   trainBtn.disabled = false;
 }
@@ -400,11 +433,13 @@ function drawScaling(rows) {
   const { ctx, w, h } = setupCanvas($('scalingChart'));
   const pad = 42;
   drawAxes(ctx, w, h, pad, 'chain length n', 'excess cost / variable');
+
   const maxY = Math.max(1, ...rows.flatMap(r => [r.policy, r.sa])) * 1.12;
   const minN = Math.min(...rows.map(r => r.n));
   const maxN = Math.max(...rows.map(r => r.n));
   const X = n => pad + (n - minN) / Math.max(1, maxN - minN) * (w - pad - 20);
   const Y = y => h - pad - y / maxY * (h - pad - 28);
+
   ctx.fillStyle = '#7b8495';
   ctx.font = '11px system-ui';
   for (const row of rows) ctx.fillText(String(row.n), X(row.n) - 6, h - pad + 17);
@@ -412,6 +447,7 @@ function drawScaling(rows) {
     const yv = maxY * k / 4;
     ctx.fillText(fmt(yv), 4, Y(yv) + 4);
   }
+
   drawLine(ctx, rows.map(r => [X(r.n), Y(r.policy)]), '#5b67d6');
   drawLine(ctx, rows.map(r => [X(r.n), Y(r.sa)]), '#dd6b55');
 }
@@ -420,9 +456,11 @@ function drawInstance(target, exact, policy, sa) {
   const { ctx, w, h } = setupCanvas($('instanceChart'));
   const pad = 42;
   drawAxes(ctx, w, h, pad, 'position', 'value');
+
   const n = target.length;
   const X = i => pad + i / Math.max(1, n - 1) * (w - pad - 20);
   const Y = v => h - pad - v / MAX_VALUE * (h - pad - 28);
+
   drawLine(ctx, Array.from(target, (v, i) => [X(i), Y(v)]), '#9aa4b8', 1.5);
   drawLine(ctx, Array.from(exact, (v, i) => [X(i), Y(v)]), '#2e8b72', 2.5);
   drawLine(ctx, Array.from(policy, (v, i) => [X(i), Y(v)]), '#5b67d6', 2.2);
