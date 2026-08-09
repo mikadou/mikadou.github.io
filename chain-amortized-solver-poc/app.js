@@ -56,12 +56,20 @@ function shuffledPermutation(n, rng) {
   return x;
 }
 
-// Constraint energy for x[0] < x[1] < ... < x[n-1].
-// Values are always restricted to 0..n-1, so energy=0 has exactly one solution: x[i]=i.
+function pairCount(n) {
+  return Math.max(1, n * (n - 1) / 2);
+}
+
+// Dense monotonic-constraint energy. We count every violated implied ordering
+// i < j => x[i] < x[j], not only adjacent pairs. This is just the transitive
+// closure of the chain and gives RL a much denser signal.
+// Values are restricted to 0..n-1, so energy=0 has exactly one solution: x[i]=i.
 function energy(x) {
   let e = 0;
   for (let i = 0; i < x.length - 1; i++) {
-    e += Math.max(0, x[i] - x[i + 1] + 1);
+    for (let j = i + 1; j < x.length; j++) {
+      if (x[i] >= x[j]) e++;
+    }
   }
   return e;
 }
@@ -70,10 +78,17 @@ function isSolved(x) {
   return energy(x) === 0;
 }
 
-function localViolations(x, i) {
-  const left = i > 0 ? Math.max(0, x[i - 1] - x[i] + 1) : 0;
-  const right = i + 1 < x.length ? Math.max(0, x[i] - x[i + 1] + 1) : 0;
-  return { left, right };
+function nodeViolations(x, i, value = x[i]) {
+  let predecessors = 0;
+  let successors = 0;
+  for (let j = 0; j < i; j++) if (x[j] >= value) predecessors++;
+  for (let j = i + 1; j < x.length; j++) if (value >= x[j]) successors++;
+  return { predecessors, successors };
+}
+
+function nodeContribution(x, i, value = x[i]) {
+  const v = nodeViolations(x, i, value);
+  return v.predecessors + v.successors;
 }
 
 // The same action-scoring network is reused for every candidate (i,v), at every n.
@@ -85,7 +100,7 @@ function actionFeatures(x, i, v) {
   const cur = x[i];
   const left = i > 0 ? x[i - 1] : 0;
   const right = i + 1 < n ? x[i + 1] : d;
-  const viol = localViolations(x, i);
+  const viol = nodeViolations(x, i);
   return Float32Array.from([
     i / d,
     v / d,
@@ -94,8 +109,8 @@ function actionFeatures(x, i, v) {
     right / d,
     i === 0 ? 1 : 0,
     i === n - 1 ? 1 : 0,
-    viol.left / Math.max(1, n),
-    viol.right / Math.max(1, n),
+    viol.predecessors / Math.max(1, i),
+    viol.successors / Math.max(1, n - 1 - i),
     (v - cur) / d
   ]);
 }
@@ -142,7 +157,7 @@ function greedyAction(x) {
   let bestQ = -Infinity;
   for (let i = 0; i < n; i++) {
     for (let v = 0; v < n; v++) {
-      if (v === x[i]) continue; // no-op
+      if (v === x[i]) continue;
       const idx = i * n + v;
       if (q[idx] > bestQ) {
         bestQ = q[idx];
@@ -171,6 +186,12 @@ function epsilonAt(episode, total) {
   const end = 0.04;
   const t = episode / Math.max(1, total - 1);
   return end + (start - end) * Math.pow(1 - t, 2);
+}
+
+function curriculumMaxN(episode, total, minN, maxN) {
+  if (maxN <= minN) return maxN;
+  const t = Math.min(1, episode / Math.max(1, total * 0.65));
+  return Math.min(maxN, minN + Math.floor((maxN - minN) * t));
 }
 
 function addEpisodeToReplay(trajectory) {
@@ -223,11 +244,13 @@ async function trainRL() {
   let lastLoss = NaN;
 
   for (let ep = 0; ep < totalEpisodes; ep++) {
-    const n = minN + Math.floor(rng() * (maxN - minN + 1));
+    const activeMax = curriculumMaxN(ep, totalEpisodes, minN, maxN);
+    const n = minN + Math.floor(rng() * (activeMax - minN + 1));
     const x = shuffledPermutation(n, rng);
     const epsilon = epsilonAt(ep, totalEpisodes);
-    const maxSteps = Math.max(n, Math.ceil(3 * n));
+    const maxSteps = Math.ceil(3 * n);
     const trajectory = [];
+    const norm = pairCount(n);
 
     for (let step = 0; step < maxSteps; step++) {
       const before = energy(x);
@@ -236,8 +259,8 @@ async function trainRL() {
       const after = energy(x);
       const solved = after === 0;
 
-      // Dense reward is derived only from constraint improvement. No x[i]=i label is used.
-      let reward = (before - after) / Math.max(1, n);
+      // Reward is derived only from monotonic-constraint improvement. No x[i]=i label is used.
+      let reward = (before - after) / norm;
       reward -= 0.002;
       if (solved) reward += 1.0;
 
@@ -246,7 +269,7 @@ async function trainRL() {
     }
 
     if (!isSolved(x) && trajectory.length) {
-      trajectory[trajectory.length - 1].reward -= 0.20 * energy(x) / Math.max(1, n);
+      trajectory[trajectory.length - 1].reward -= 0.20 * energy(x) / norm;
     }
 
     addEpisodeToReplay(trajectory);
@@ -258,7 +281,7 @@ async function trainRL() {
 
     if (ep % 5 === 0 || ep === totalEpisodes - 1) {
       const successRate = recent.reduce((a, b) => a + b, 0) / Math.max(1, recent.length);
-      statusEl.textContent = `Episode ${ep + 1}/${totalEpisodes} · n=${n} · ε=${epsilon.toFixed(3)} · recent success ${(100 * successRate).toFixed(0)}% · replay ${replay.length}${Number.isFinite(lastLoss) ? ` · loss ${lastLoss.toFixed(4)}` : ''}`;
+      statusEl.textContent = `Episode ${ep + 1}/${totalEpisodes} · curriculum n≤${activeMax} · sampled n=${n} · ε=${epsilon.toFixed(3)} · recent success ${(100 * successRate).toFixed(0)}% · replay ${replay.length}${Number.isFinite(lastLoss) ? ` · loss ${lastLoss.toFixed(4)}` : ''}`;
       await tf.nextFrame();
     }
   }
@@ -294,19 +317,20 @@ function runSA(start, evaluations, rng) {
     let v = Math.floor(rng() * (x.length - 1));
     if (v >= x[i]) v++;
     const old = x[i];
-    x[i] = v;
-    const nextE = energy(x);
+    const oldContribution = nodeContribution(x, i, old);
+    const newContribution = nodeContribution(x, i, v);
+    const nextE = e - oldContribution + newContribution;
     const delta = nextE - e;
     const frac = step / Math.max(1, evaluations - 1);
     const temp = T0 * Math.pow(Tend / T0, frac);
+
     if (delta <= 0 || rng() < Math.exp(-delta / Math.max(1e-6, temp))) {
+      x[i] = v;
       e = nextE;
       if (e < bestE) {
         bestE = e;
         best = Int32Array.from(x);
       }
-    } else {
-      x[i] = old;
     }
   }
   return { x: best, solved: bestE === 0, finalEnergy: bestE, evaluations };
