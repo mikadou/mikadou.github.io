@@ -68,8 +68,8 @@
         </div>
         <div>
           <h3>RL, not supervised learning</h3>
-          <p>There are no exact-solution labels in training. Episodes start from random permutations. Reward is only the reduction in monotonic-constraint energy, plus a terminal bonus when all inequalities are satisfied.</p>
-          <p>Exploration is ε-greedy: early episodes choose many random <code>(i,v)</code> pairs; ε decays toward 0.04 so later episodes increasingly exploit the learned action-value scorer.</p>
+          <p>There are no exact-solution labels in training. Episodes start from random permutations. Reward is the reduction in violated monotonic orderings, plus a terminal bonus when all inequalities are satisfied. For denser feedback, the reward counts the transitive ordering constraints <code>i&lt;j ⇒ xᵢ&lt;xⱼ</code>, which are implied by the chain.</p>
+          <p>Exploration is ε-greedy: early episodes choose many random <code>(i,v)</code> pairs; ε decays toward 0.04 so later episodes increasingly exploit the learned action-value scorer. Training also uses a short-to-long curriculum over the selected length range.</p>
         </div>
       </div>
     </section>
@@ -83,6 +83,6 @@
 
     <footer>Everything runs locally in your browser. No training data or model state is uploaded.</footer>
   </main>
-  <script type="module" src="app.js?v=20260809-7"></script>
+  <script type="module" src="app.js?v=20260809-8"></script>
 </body>
 </html>
