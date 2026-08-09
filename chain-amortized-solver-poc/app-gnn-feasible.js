@@ -5,7 +5,6 @@ const NODE_FEATURE_DIM = 5;
 const EMBED_DIM = 24;
 const MESSAGE_ROUNDS = 6;
 const EDGE_TYPES = 4;
-const STEPS_PER_EPISODE = 1;
 const REPLAY_LIMIT_PER_N = 700;
 const BATCH_HALF = 8;
 const TRAIN_CANDIDATES = 256;
@@ -63,15 +62,6 @@ function emptyState(n) {
     assigned: new Uint8Array(n),
     values: Int16Array.from({ length: n }, () => -1),
     assignedCount: 0
-  };
-}
-
-function cloneState(state) {
-  return {
-    n: state.n,
-    assigned: Uint8Array.from(state.assigned),
-    values: Int16Array.from(state.values),
-    assignedCount: state.assignedCount
   };
 }
 
@@ -423,31 +413,23 @@ function runEpisode(n, epsilon, rng, collect = true) {
   };
 }
 
-function greedyRollout(n, maxProposals = 8 * n) {
+function greedyRollout(n) {
   const state = emptyState(n);
-  let proposals = 0;
-  while (state.assignedCount < n && proposals < maxProposals) {
+  while (state.assignedCount < n) {
     const actions = allActions(state);
     if (!actions.length) break;
     const q = scoreActions(state, actions);
-    let committed = false;
-    while (!committed && proposals < maxProposals) {
-      let best = -1;
-      let bestQ = -Infinity;
-      for (let k = 0; k < q.length; k++) {
-        if (q[k] > bestQ) { bestQ = q[k]; best = k; }
-      }
-      if (best < 0) break;
-      q[best] = -Infinity;
-      proposals++;
-      const a = actions[best];
-      if (tryAction(state, a.i, a.v, true)) committed = true;
-    }
-    if (!committed) break;
+    let best = 0;
+    for (let k = 1; k < q.length; k++) if (q[k] > q[best]) best = k;
+    const a = actions[best];
+    // Evaluation is open-loop: no feasibility oracle repairs the policy.
+    state.assigned[a.i] = 1;
+    state.values[a.i] = a.v;
+    state.assignedCount++;
   }
   return {
     solved: state.assignedCount === n && isStrictChain(state.values),
-    proposals,
+    proposals: state.assignedCount,
     x: Int16Array.from(state.values)
   };
 }
@@ -481,8 +463,8 @@ async function trainRL() {
     if (ep % 20 === 0 || ep === total - 1) {
       const counts = replayCounts();
       const trainSuccess = recent.reduce((a, b) => a + b, 0) / Math.max(1, recent.length);
-      const probe = ep > 40 ? greedyRollout(maxN, 6 * maxN) : { solved: false, proposals: 0 };
-      statusEl.textContent = `Episode ${ep + 1}/${total} · ε=${epsilon.toFixed(3)} · recent exploratory solve ${(100 * trainSuccess).toFixed(0)}% · greedy n=${maxN}: ${probe.solved ? 'SOLVED' : 'not yet'}${probe.proposals ? ` in ${probe.proposals} proposals` : ''} · +${counts.pos}/−${counts.neg}${Number.isFinite(lastLoss) ? ` · loss ${lastLoss.toFixed(4)}` : ''}`;
+      const probe = ep > 40 ? greedyRollout(maxN) : { solved: false, proposals: 0 };
+      statusEl.textContent = `Episode ${ep + 1}/${total} · ε=${epsilon.toFixed(3)} · recent exploratory solve ${(100 * trainSuccess).toFixed(0)}% · open-loop n=${maxN}: ${probe.solved ? 'SOLVED' : 'not yet'}${probe.proposals ? ` in ${probe.proposals} choices` : ''} · +${counts.pos}/−${counts.neg}${Number.isFinite(lastLoss) ? ` · loss ${lastLoss.toFixed(4)}` : ''}`;
       await tf.nextFrame();
     }
   }
@@ -554,7 +536,7 @@ async function runBenchmark() {
     const policyProps = [];
     let saSolved = 0;
     for (let t = 0; t < trials; t++) {
-      const policy = greedyRollout(n, 8 * n);
+      const policy = greedyRollout(n);
       if (policy.solved) { policySolved++; policyProps.push(policy.proposals); }
       const sa = runSA(n, 120 * n, rng);
       if (sa.solved) saSolved++;
@@ -571,7 +553,7 @@ async function runBenchmark() {
   drawScaling(rows);
   const longest = rows[rows.length - 1];
   const n = longest.n;
-  const policy = greedyRollout(n, 8 * n);
+  const policy = greedyRollout(n);
   const sa = runSA(n, 120 * n, mulberry32(9002));
   drawAssignment(policy.x, sa.x);
 
@@ -580,7 +562,7 @@ async function runBenchmark() {
   $('policyMoves').textContent = Number.isFinite(longest.policyProposals) ? Math.round(longest.policyProposals).toString() : '—';
   $('saEffort').textContent = (120 * n).toLocaleString();
   $('metricLength').textContent = `n=${n} · domain 0…${DOMAIN_MAX} · GNN trained on n=${trainedRange.min}–${trainedRange.max}`;
-  statusEl.textContent = `Done. Policy interacts only through joint (i,v) proposals and generic feasibility propagation.`;
+  statusEl.textContent = `Done. Benchmark is open-loop: the GNN gets exactly ${n} joint (i,v) choices and no feasibility repair.`;
 
   trainBtn.disabled = false;
   benchmarkBtn.disabled = false;
