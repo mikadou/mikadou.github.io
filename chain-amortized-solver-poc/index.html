@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>GNN PPO Feasibility Solver PoC</title>
+  <title>GNN PPO Hybrid Feasibility Solver PoC</title>
   <link rel="stylesheet" href="styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/tf-backend-wasm.js"></script>
@@ -11,9 +11,9 @@
 <body>
   <main>
     <header>
-      <p class="eyebrow">Proof of concept · typed GNN + PPO actor-critic</p>
-      <h1>Can a factor-graph GNN learn a feasible construction from terminal reward?</h1>
-      <p class="lede">Every variable has integer domain <code>0…1000</code>. The only constraints are <code>x₀ &lt; x₁ &lt; … &lt; xₙ₋₁</code>. The actor chooses both the variable and value, gets up to <code>3n</code> moves with overwrites, and receives no intermediate feasibility feedback. Reward is computed only at episode termination from the fraction of satisfied constraints, with a strong bonus for a complete solution and an additional efficiency bonus for solving in fewer moves.</p>
+      <p class="eyebrow">Proof of concept · typed GNN + PPO + annealed search</p>
+      <h1>Can a learned construction policy become a useful search heuristic?</h1>
+      <p class="lede">Every variable has integer domain <code>0…1000</code>. The only constraints are <code>x₀ &lt; x₁ &lt; … &lt; xₙ₋₁</code>. PPO training stays deliberately short-horizon: at most <code>3n</code> moves, with terminal reward from satisfied constraints, a strong full-solution bonus, and an efficiency bonus. Benchmark solving is now different: the trained GNN seeds the assignment and guides a longer <code>30n</code> stochastic search with annealed ε-random moves and simulated-annealing acceptance.</p>
     </header>
 
     <section class="card controls">
@@ -31,15 +31,15 @@
       </div>
       <div class="buttons">
         <button id="trainBtn">Train PPO GNN</button>
-        <button id="benchmarkBtn" class="secondary" disabled>Run benchmark</button>
+        <button id="benchmarkBtn" class="secondary" disabled>Run hybrid benchmark</button>
       </div>
       <div id="status" class="status">TensorFlow.js is loading…</div>
     </section>
 
     <section class="metrics">
-      <article class="metric"><span>GNN solve rate</span><strong id="policySuccess">—</strong><small>at longest test length</small></article>
+      <article class="metric"><span>Hybrid solve rate</span><strong id="policySuccess">—</strong><small>at longest test length</small></article>
       <article class="metric"><span>SA solve rate</span><strong id="saSuccess">—</strong><small>at longest test length</small></article>
-      <article class="metric"><span>GNN choices</span><strong id="policyMoves">—</strong><small>median moves when solved</small></article>
+      <article class="metric"><span>Hybrid moves</span><strong id="policyMoves">—</strong><small>median moves when solved</small></article>
       <article class="metric"><span>SA effort</span><strong id="saEffort">—</strong><small>proposals / trial</small></article>
     </section>
     <p class="status">Headline benchmark: <strong id="metricLength">—</strong></p>
@@ -47,15 +47,15 @@
     <section class="grid two">
       <article class="card">
         <h2>Size generalization</h2>
-        <p>The same typed message-passing weights and actor/critic heads are reused on larger factor graphs. The dashed line marks the largest size actually reached by the curriculum.</p>
+        <p>The same typed message-passing weights and actor/critic heads are reused on larger factor graphs. The dashed line marks the largest size actually reached by the PPO curriculum; beyond that, the benchmark tests whether the learned policy remains useful inside longer search.</p>
         <canvas id="scalingChart" width="760" height="360"></canvas>
-        <div class="legend"><span><i class="dot policy"></i> PPO typed-GNN policy</span><span><i class="dot sa"></i> simulated annealing</span></div>
+        <div class="legend"><span><i class="dot policy"></i> PPO-guided hybrid search</span><span><i class="dot sa"></i> simulated annealing</span></div>
       </article>
       <article class="card">
         <h2>Longest held-out chain</h2>
-        <p>Blue is the greedy PPO policy when it first reaches feasibility or exhausts its <code>3n</code> move budget; orange is simulated annealing. Any strictly increasing curve inside <code>0…1000</code> is feasible.</p>
+        <p>Blue is the best incumbent found by PPO-guided search within <code>30n</code> moves; orange is simulated annealing after its own budget. Any strictly increasing curve inside <code>0…1000</code> is feasible.</p>
         <canvas id="instanceChart" width="760" height="360"></canvas>
-        <div class="legend"><span><i class="dot policy"></i> GNN policy</span><span><i class="dot sa"></i> SA</span></div>
+        <div class="legend"><span><i class="dot policy"></i> PPO-guided hybrid</span><span><i class="dot sa"></i> SA</span></div>
       </article>
     </section>
 
@@ -96,14 +96,30 @@
       <div class="grid two text-grid">
         <div>
           <h3>Graded terminal signal</h3>
-          <p>The first <code>n</code> moves ensure every variable has an initial value. Later moves may overwrite any variable. The episode terminates immediately when the full assignment becomes strictly increasing, or at the <code>3n</code> cap.</p>
+          <p>The first <code>n</code> training moves ensure every variable has an initial value. Later training moves may overwrite any variable. The episode terminates immediately when the full assignment becomes strictly increasing, or at the <code>3n</code> cap.</p>
           <p>There is still no propagation or per-step feasibility oracle. At termination, the base reward is the fraction of adjacent constraints <code>xᵢ &lt; xᵢ₊₁</code> that are satisfied. A failure therefore scores from <code>0</code> up to but not including <code>1</code>.</p>
-          <p>A complete feasible solution gets an additional <code>+2</code>, plus an efficiency bonus from <code>0</code> to <code>1</code>. Solving at the full <code>3n</code> budget scores <code>3</code>; solving in the minimum <code>n</code> moves scores the maximum <code>4</code>.</p>
+          <p>A complete feasible solution gets an additional <code>+2</code>, plus an efficiency bonus from <code>0</code> to <code>1</code>. Solving at the full <code>3n</code> training budget scores <code>3</code>; solving in the minimum <code>n</code> moves scores the maximum <code>4</code>.</p>
         </div>
         <div>
           <h3>Greedy-driven promotion</h3>
           <p>Training concentrates on the current curriculum size but mixes in previous sizes to reduce forgetting. Every few PPO updates, the deterministic greedy actor is evaluated separately.</p>
           <p>The curriculum promotes to <code>n+1</code> after enough current-size experience and at least 80% greedy solve rate. Exploratory stochastic success is displayed for diagnosis but no longer blocks promotion.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="card explanation">
+      <h2>Long-horizon deployment search</h2>
+      <div class="grid two text-grid">
+        <div>
+          <h3>Learned proposals + ε exploration</h3>
+          <p>The solver first builds a complete assignment using the deterministic PPO policy. It then gets up to <code>30n</code> total moves. Most correction proposals come from the learned actor; ε-random moves start at <code>20%</code> and anneal to <code>1%</code>.</p>
+          <p>Random proposals are mostly local value perturbations whose radius shrinks over time, with occasional global random values to escape larger traps.</p>
+        </div>
+        <div>
+          <h3>Annealed acceptance + incumbent</h3>
+          <p>Search energy is the summed magnitude of adjacent strict-order violations. Improving moves are always accepted; worsening moves may be accepted with a simulated-annealing probability whose temperature decays from hot to cold.</p>
+          <p>The best assignment ever seen is stored separately. Exploration can therefore move through worse states without losing the incumbent, and search stops immediately when a feasible chain is found.</p>
         </div>
       </div>
     </section>
@@ -115,6 +131,6 @@
 
     <footer>Everything runs locally in your browser. No training data or model state is uploaded.</footer>
   </main>
-  <script type="module" src="app-gnn-ppo-loader.js?v=20260810-21"></script>
+  <script type="module" src="app-gnn-ppo-loader.js?v=20260811-22"></script>
 </body>
 </html>
