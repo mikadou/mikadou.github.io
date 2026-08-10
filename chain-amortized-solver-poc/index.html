@@ -12,7 +12,7 @@
     <header>
       <p class="eyebrow">Proof of concept · typed GNN + reinforcement learning</p>
       <h1>Can a factor-graph GNN discover a feasible construction from terminal reward alone?</h1>
-      <p class="lede">Every variable has integer domain <code>0…1000</code>. The only constraints are <code>x₀ &lt; x₁ &lt; … &lt; xₙ₋₁</code>. The GNN chooses joint actions <code>(i,v)</code> and now gets a budget of <code>3n</code> moves, so it can revise earlier choices. Nothing checks or repairs partial assignments during training: reward arrives only after the full move budget.</p>
+      <p class="lede">Every variable has integer domain <code>0…1000</code>. The only constraints are <code>x₀ &lt; x₁ &lt; … &lt; xₙ₋₁</code>. The GNN chooses joint actions <code>(i,v)</code> and gets a budget of up to <code>3n</code> moves, so it can revise earlier choices. Nothing checks or repairs partial assignments during training: reward arrives only when a complete feasible solution is first found or when the move budget is exhausted.</p>
     </header>
 
     <section class="card controls">
@@ -38,7 +38,7 @@
     <section class="metrics">
       <article class="metric"><span>GNN solve rate</span><strong id="policySuccess">—</strong><small>at longest test length</small></article>
       <article class="metric"><span>SA solve rate</span><strong id="saSuccess">—</strong><small>at longest test length</small></article>
-      <article class="metric"><span>GNN choices</span><strong id="policyMoves">—</strong><small>3n joint actions</small></article>
+      <article class="metric"><span>GNN choices</span><strong id="policyMoves">—</strong><small>median moves when solved</small></article>
       <article class="metric"><span>SA effort</span><strong id="saEffort">—</strong><small>proposals / trial</small></article>
     </section>
     <p class="status">Headline benchmark: <strong id="metricLength">—</strong></p>
@@ -52,7 +52,7 @@
       </article>
       <article class="card">
         <h2>Longest held-out chain</h2>
-        <p>Blue is the assignment left by the GNN after <code>3n</code> open-loop joint choices; orange is simulated annealing after its search budget. Any strictly increasing curve inside <code>0…1000</code> is feasible.</p>
+        <p>Blue is the assignment left by the GNN when it first reaches feasibility or exhausts its <code>3n</code> move budget; orange is simulated annealing after its search budget. Any strictly increasing curve inside <code>0…1000</code> is feasible.</p>
         <canvas id="instanceChart" width="760" height="360"></canvas>
         <div class="legend"><span><i class="dot policy"></i> GNN policy</span><span><i class="dot sa"></i> SA</span></div>
       </article>
@@ -79,8 +79,8 @@
       <div class="grid two text-grid">
         <div>
           <h3>Full joint action sequence</h3>
-          <p>The first <code>n</code> moves must assign each variable once. The remaining <code>2n</code> moves may choose any variable again and overwrite its value, giving the learned policy a chance to recover from earlier mistakes.</p>
-          <p>After exactly <code>3n</code> actions, the completed assignment is checked once. A strictly increasing chain gets terminal reward <code>+1</code>; an infeasible chain gets terminal reward <code>−1</code>. There is still no intermediate feasibility signal.</p>
+          <p>The first <code>n</code> moves must assign each variable once. The remaining budget may choose any variable again and overwrite its value, giving the learned policy a chance to recover from earlier mistakes.</p>
+          <p>As soon as a complete assignment becomes strictly increasing, the episode terminates immediately with reward <code>+1</code>. If no feasible assignment is found by <code>3n</code> moves, the episode ends with reward <code>−1</code>. There is still no intermediate feasibility signal.</p>
         </div>
         <div>
           <h3>REINFORCE + curriculum</h3>
@@ -92,11 +92,11 @@
 
     <section class="card explanation">
       <h2>No feasibility oracle during learning</h2>
-      <p>The environment does not label individual moves as good or bad, does not propagate partial domains, and does not expose a target formula such as <code>v=k·i</code>. The only learning signal is whether the final full assignment after the <code>3n</code>-move budget satisfies all greater-than constraints.</p>
+      <p>The environment does not label individual moves as good or bad, does not propagate partial domains, and does not expose a target formula such as <code>v=k·i</code>. The only learning signal is whether the evolving full assignment eventually satisfies all greater-than constraints before the <code>3n</code>-move cap.</p>
     </section>
 
     <footer>Everything runs locally in your browser. No training data or model state is uploaded.</footer>
   </main>
-  <script type="module" src="app-gnn-terminal-3x.js?v=20260810-16"></script>
+  <script type="module" src="app-gnn-terminal-3x.js?v=20260810-17"></script>
 </body>
 </html>
