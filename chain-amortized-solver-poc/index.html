@@ -3,16 +3,16 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>GNN RL Terminal-Reward Solver PoC</title>
+  <title>GNN PPO Feasibility Solver PoC</title>
   <link rel="stylesheet" href="styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
 </head>
 <body>
   <main>
     <header>
-      <p class="eyebrow">Proof of concept · typed GNN + reinforcement learning</p>
-      <h1>Can a factor-graph GNN discover a feasible construction from terminal reward alone?</h1>
-      <p class="lede">Every variable has integer domain <code>0…1000</code>. The only constraints are <code>x₀ &lt; x₁ &lt; … &lt; xₙ₋₁</code>. The GNN chooses joint actions <code>(i,v)</code> and gets a budget of up to <code>3n</code> moves, so it can revise earlier choices. Nothing checks or repairs partial assignments during training: reward arrives only when a complete feasible solution is first found or when the move budget is exhausted.</p>
+      <p class="eyebrow">Proof of concept · typed GNN + PPO actor-critic</p>
+      <h1>Can a factor-graph GNN learn a feasible construction from terminal reward alone?</h1>
+      <p class="lede">Every variable has integer domain <code>0…1000</code>. The only constraints are <code>x₀ &lt; x₁ &lt; … &lt; xₙ₋₁</code>. The actor chooses both the variable and value, gets up to <code>3n</code> moves with overwrites, and receives no intermediate feasibility feedback. A complete feasible chain ends the episode immediately with <code>+1</code>; exhausting the budget gives <code>−1</code>.</p>
     </header>
 
     <section class="card controls">
@@ -29,7 +29,7 @@
         <input id="episodes" type="range" min="100" max="5000" step="100" value="1000" />
       </div>
       <div class="buttons">
-        <button id="trainBtn">Train terminal-reward GNN</button>
+        <button id="trainBtn">Train PPO GNN</button>
         <button id="benchmarkBtn" class="secondary" disabled>Run benchmark</button>
       </div>
       <div id="status" class="status">TensorFlow.js is loading…</div>
@@ -46,13 +46,13 @@
     <section class="grid two">
       <article class="card">
         <h2>Size generalization</h2>
-        <p>The same typed message-passing weights and action head are reused on larger factor graphs. The curriculum starts small and advances one node at a time only when the current length is being solved reliably.</p>
+        <p>The same typed message-passing weights and actor/critic heads are reused on larger factor graphs. The dashed line marks the largest size actually reached by the curriculum.</p>
         <canvas id="scalingChart" width="760" height="360"></canvas>
-        <div class="legend"><span><i class="dot policy"></i> typed GNN RL policy</span><span><i class="dot sa"></i> simulated annealing</span></div>
+        <div class="legend"><span><i class="dot policy"></i> PPO typed-GNN policy</span><span><i class="dot sa"></i> simulated annealing</span></div>
       </article>
       <article class="card">
         <h2>Longest held-out chain</h2>
-        <p>Blue is the assignment left by the GNN when it first reaches feasibility or exhausts its <code>3n</code> move budget; orange is simulated annealing after its search budget. Any strictly increasing curve inside <code>0…1000</code> is feasible.</p>
+        <p>Blue is the greedy PPO policy when it first reaches feasibility or exhausts its <code>3n</code> move budget; orange is simulated annealing. Any strictly increasing curve inside <code>0…1000</code> is feasible.</p>
         <canvas id="instanceChart" width="760" height="360"></canvas>
         <div class="legend"><span><i class="dot policy"></i> GNN policy</span><span><i class="dot sa"></i> SA</span></div>
       </article>
@@ -69,34 +69,45 @@
         <div>
           <h3>Typed message passing</h3>
           <p>Four directed edge types distinguish smaller-operand and greater-operand roles in both directions. Each edge type has its own learned message matrix.</p>
-          <p>Six residual message-passing rounds produce a 24-dimensional embedding. There is no raw node-ID bypass around the GNN.</p>
+          <p>Six residual message-passing rounds produce 24-dimensional node embeddings. There is no raw node-ID bypass around the GNN.</p>
         </div>
       </div>
     </section>
 
     <section class="card explanation">
-      <h2>Terminal-only RL with correction moves</h2>
+      <h2>Factorized PPO actor-critic</h2>
       <div class="grid two text-grid">
         <div>
-          <h3>Full joint action sequence</h3>
-          <p>The first <code>n</code> moves must assign each variable once. The remaining budget may choose any variable again and overwrite its value, giving the learned policy a chance to recover from earlier mistakes.</p>
-          <p>As soon as a complete assignment becomes strictly increasing, the episode terminates immediately with reward <code>+1</code>. If no feasible assignment is found by <code>3n</code> moves, the episode ends with reward <code>−1</code>. There is still no intermediate feasibility signal.</p>
+          <h3>Still chooses both <code>i</code> and <code>v</code></h3>
+          <p>The actor first samples which variable to modify from a categorical distribution over variable-node embeddings. The chosen variable embedding then produces a Gaussian <code>(μ, σ)</code> over a continuous latent value; a sigmoid maps that latent into integer <code>v∈0…1000</code>.</p>
+          <p>This replaces one giant <code>n×1001</code> categorical action with <code>π(i|s)π(v|s,i)</code>, while leaving the policy responsible for both decisions.</p>
         </div>
         <div>
-          <h3>REINFORCE + curriculum</h3>
-          <p>Policy-gradient learning assigns the terminal return back to every action in the episode, with a running baseline to reduce variance and a small entropy bonus to preserve exploration.</p>
-          <p>The curriculum begins at the selected start length. It promotes from <code>n</code> to <code>n+1</code> only after a 30-episode window exceeds 70% success and the greedy policy also solves the current length. Exploration temperature is reset upward after each promotion.</p>
+          <h3>PPO + learned critic</h3>
+          <p>A critic pools the GNN embeddings and predicts <code>V(s)</code>. Batches of episodes use generalized advantage estimation (GAE), clipped PPO policy updates, a value loss, and a small entropy bonus.</p>
+          <p>Successful trajectories are also kept in a small self-imitation buffer. Those are generated only by the agent itself from terminal successes; there are still no solver labels or target assignments.</p>
         </div>
       </div>
     </section>
 
     <section class="card explanation">
-      <h2>No feasibility oracle during learning</h2>
-      <p>The environment does not label individual moves as good or bad, does not propagate partial domains, and does not expose a target formula such as <code>v=k·i</code>. The only learning signal is whether the evolving full assignment eventually satisfies all greater-than constraints before the <code>3n</code>-move cap.</p>
+      <h2>Curriculum and reward</h2>
+      <div class="grid two text-grid">
+        <div>
+          <h3>Terminal reward only</h3>
+          <p>The first <code>n</code> moves ensure every variable has an initial value. Later moves may overwrite any variable. The episode terminates immediately when the full assignment becomes strictly increasing, or at the <code>3n</code> cap.</p>
+          <p>There is no propagation or intermediate feasibility oracle. Rewards are zero until the terminal transition, which is <code>+1</code> for success or <code>−1</code> for failure.</p>
+        </div>
+        <div>
+          <h3>Greedy-driven promotion</h3>
+          <p>Training concentrates on the current curriculum size but mixes in previous sizes to reduce forgetting. Every few PPO updates, the deterministic greedy actor is evaluated separately.</p>
+          <p>The curriculum promotes to <code>n+1</code> after enough current-size experience and at least 80% greedy solve rate. Exploratory stochastic success is displayed for diagnosis but no longer blocks promotion.</p>
+        </div>
+      </div>
     </section>
 
     <footer>Everything runs locally in your browser. No training data or model state is uploaded.</footer>
   </main>
-  <script type="module" src="app-gnn-terminal-3x.js?v=20260810-17"></script>
+  <script type="module" src="app-gnn-ppo.js?v=20260810-18"></script>
 </body>
 </html>
