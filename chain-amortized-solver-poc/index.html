@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>GNN RL Feasibility Solver PoC</title>
+  <title>GNN RL Terminal-Reward Solver PoC</title>
   <link rel="stylesheet" href="styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
 </head>
@@ -11,25 +11,25 @@
   <main>
     <header>
       <p class="eyebrow">Proof of concept · typed GNN + reinforcement learning</p>
-      <h1>Can a factor-graph GNN learn a simple feasible construction?</h1>
-      <p class="lede">Every variable now has the large integer domain <code>0…1000</code>. The only constraints are <code>x₀ &lt; x₁ &lt; … &lt; xₙ₋₁</code>. There are many feasible solutions — for example <code>xᵢ = k·i</code> for any positive <code>k</code> that stays inside the domain. The GNN receives no formula or solution label; it repeatedly chooses the full joint action <code>(i,v)</code> and learns only from generic feasibility feedback.</p>
+      <h1>Can a factor-graph GNN discover a feasible construction from terminal reward alone?</h1>
+      <p class="lede">Every variable has integer domain <code>0…1000</code>. The only constraints are <code>x₀ &lt; x₁ &lt; … &lt; xₙ₋₁</code>. The GNN chooses the complete sequence of joint actions <code>(i,v)</code>. Nothing checks or repairs partial assignments during training: reward arrives only after the full assignment has been built.</p>
     </header>
 
     <section class="card controls">
       <div>
-        <label>Training min length <span id="trainMinNLabel">4</span></label>
-        <input id="trainMinN" type="range" min="4" max="24" step="1" value="4" />
+        <label>Curriculum start length <span id="trainMinNLabel">2</span></label>
+        <input id="trainMinN" type="range" min="2" max="12" step="1" value="2" />
       </div>
       <div>
-        <label>Training max length <span id="trainMaxNLabel">20</span></label>
-        <input id="trainMaxN" type="range" min="4" max="30" step="1" value="20" />
+        <label>Curriculum target length <span id="trainMaxNLabel">20</span></label>
+        <input id="trainMaxN" type="range" min="2" max="30" step="1" value="20" />
       </div>
       <div>
         <label>RL episodes <span id="episodesLabel">1000</span></label>
         <input id="episodes" type="range" min="100" max="5000" step="100" value="1000" />
       </div>
       <div class="buttons">
-        <button id="trainBtn">Train feasibility GNN</button>
+        <button id="trainBtn">Train terminal-reward GNN</button>
         <button id="benchmarkBtn" class="secondary" disabled>Run benchmark</button>
       </div>
       <div id="status" class="status">TensorFlow.js is loading…</div>
@@ -46,13 +46,13 @@
     <section class="grid two">
       <article class="card">
         <h2>Size generalization</h2>
-        <p>The dashed line marks the largest graph size seen during training. To the right, the same typed message-passing weights and action head are reused on larger factor graphs without retraining.</p>
+        <p>The same typed message-passing weights and action head are reused on larger factor graphs. The curriculum starts small and advances one node at a time only when the current length is being solved reliably.</p>
         <canvas id="scalingChart" width="760" height="360"></canvas>
         <div class="legend"><span><i class="dot policy"></i> typed GNN RL policy</span><span><i class="dot sa"></i> simulated annealing</span></div>
       </article>
       <article class="card">
         <h2>Longest held-out chain</h2>
-        <p>Blue is the assignment produced by the GNN in exactly <code>n</code> open-loop joint choices; orange is simulated annealing after its search budget. Any strictly increasing curve inside <code>0…1000</code> is a valid solution.</p>
+        <p>Blue is the assignment produced by the GNN in exactly <code>n</code> open-loop joint choices; orange is simulated annealing after its search budget. Any strictly increasing curve inside <code>0…1000</code> is feasible.</p>
         <canvas id="instanceChart" width="760" height="360"></canvas>
         <div class="legend"><span><i class="dot policy"></i> GNN policy</span><span><i class="dot sa"></i> SA</span></div>
       </article>
@@ -63,40 +63,40 @@
       <div class="grid two text-grid">
         <div>
           <h3>Two node types</h3>
-          <p><strong>Variable nodes</strong> <code>Vᵢ</code> represent <code>xᵢ</code>. Their features contain the variable type bit, normalized node ID <code>i/(n−1)</code>, whether the variable is already assigned, and its assigned value when present.</p>
-          <p><strong>Constraint nodes</strong> <code>Gₖ</code> represent <code>xₖ₊₁ &gt; xₖ</code>. They have their own node type plus normalized constraint ID.</p>
+          <p><strong>Variable nodes</strong> <code>Vᵢ</code> carry a variable-type bit, normalized node ID <code>i/(n−1)</code>, assignment status, and assigned value when present.</p>
+          <p><strong>Constraint nodes</strong> <code>Gₖ</code> represent <code>xₖ₊₁ &gt; xₖ</code> and carry their own type bit and normalized constraint ID.</p>
         </div>
         <div>
           <h3>Typed message passing</h3>
           <p>Four directed edge types distinguish smaller-operand and greater-operand roles in both directions. Each edge type has its own learned message matrix.</p>
-          <p>Six residual message-passing rounds produce a 24-dimensional embedding for every graph node. There is no raw node-ID bypass around the GNN.</p>
+          <p>Six residual message-passing rounds produce a 24-dimensional embedding. There is no raw node-ID bypass around the GNN.</p>
         </div>
       </div>
     </section>
 
     <section class="card explanation">
-      <h2>Sequential feasibility RL</h2>
+      <h2>Terminal-only RL</h2>
       <div class="grid two text-grid">
         <div>
-          <h3>Joint <code>(i,v)</code> action</h3>
-          <p>The action head combines the GNN embedding of an unassigned variable <code>Vᵢ</code> with candidate value <code>v/1000</code>, then returns one scalar score. The policy therefore chooses both which variable to fix and which integer value to give it.</p>
-          <p>During training, greedy exploration scores a sampled set of joint actions; evaluation scores the full <code>n × 1001</code> action space.</p>
+          <h3>Full joint action sequence</h3>
+          <p>At each step the policy scores every available <code>(unassigned variable, value 0…1000)</code> pair, samples one joint action during training, and commits it unconditionally. No propagator is consulted mid-episode.</p>
+          <p>After exactly <code>n</code> actions, the completed assignment is checked once. A strictly increasing chain gets terminal reward <code>+1</code>; an infeasible chain gets terminal reward <code>−1</code>.</p>
         </div>
         <div>
-          <h3>Feasibility only</h3>
-          <p>During training, after a proposal <code>xᵢ=v</code>, a generic bound propagator checks the domains <code>0…1000</code> and all <code>&gt;</code> constraints together with assignments already made. Reward is <code>+1</code> if a completion still exists and <code>−1</code> if the proposal makes the partial assignment impossible.</p>
-          <p>Accepted actions become part of the training state. There is no objective, no target assignment, and no reward for following a linear formula.</p>
+          <h3>REINFORCE + curriculum</h3>
+          <p>Policy-gradient learning assigns the terminal return back to every action in the episode, with a running baseline to reduce variance and a small entropy bonus to preserve exploration.</p>
+          <p>The curriculum begins at the selected start length. It promotes from <code>n</code> to <code>n+1</code> only after a 30-episode window exceeds 70% success and the greedy policy also solves the current length. Exploration temperature is reset upward after each promotion.</p>
         </div>
       </div>
     </section>
 
     <section class="card explanation">
-      <h2>Open-loop evaluation</h2>
-      <p>The feasibility propagator is not allowed to repair evaluation decisions. The trained GNN makes exactly one joint choice for each variable; after the complete assignment is produced, the benchmark simply checks whether it is strictly increasing. A family such as <code>xᵢ=k·i</code> is an easy reusable strategy, but the policy is free to discover any feasible monotone construction.</p>
+      <h2>No feasibility oracle during learning</h2>
+      <p>The environment does not label individual moves as good or bad, does not propagate partial domains, and does not expose a target formula such as <code>v=k·i</code>. The only learning signal is whether the final full assignment satisfies all greater-than constraints.</p>
     </section>
 
     <footer>Everything runs locally in your browser. No training data or model state is uploaded.</footer>
   </main>
-  <script type="module" src="app-gnn-feasible.js?v=20260809-14"></script>
+  <script type="module" src="app-gnn-terminal.js?v=20260810-15"></script>
 </body>
 </html>
