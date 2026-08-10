@@ -33,8 +33,8 @@ async function boot() {
     }
 
     const platformNote = isAndroid ? ' · Android reliability mode' : '';
-    if (statusEl) statusEl.textContent = `TensorFlow.js ready · backend: ${backend}${platformNote}. Loading reward-shaped PPO GNN…`;
-    await import('./app-gnn-ppo-shaped.js?v=20260810-21');
+    if (statusEl) statusEl.textContent = `TensorFlow.js ready · backend: ${backend}${platformNote}. Loading PPO-guided hybrid solver…`;
+    await import('./app-gnn-ppo-hybrid.js?v=20260811-22');
   } catch (err) {
     console.error(err);
     if (statusEl) statusEl.textContent = `Error initializing TensorFlow.js backend: ${err.message}`;
