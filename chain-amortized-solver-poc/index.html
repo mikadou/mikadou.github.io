@@ -109,11 +109,11 @@
 
     <section class="card explanation">
       <h2>Browser backend</h2>
-      <p>TensorFlow.js now runs this experiment on the WASM backend by default, with CPU fallback. WebGL is deliberately avoided so long PPO runs and large held-out benchmarks cannot fail on browser shader compilation/linking.</p>
+      <p>On Android, TensorFlow.js uses the CPU backend for reliability. This avoids both WebGL shader-link failures and missing WASM kernels such as <code>UnsortedSegmentSum</code>. Other platforms still prefer WASM with CPU fallback.</p>
     </section>
 
     <footer>Everything runs locally in your browser. No training data or model state is uploaded.</footer>
   </main>
-  <script type="module" src="app-gnn-ppo-loader.js?v=20260810-19"></script>
+  <script type="module" src="app-gnn-ppo-loader.js?v=20260810-20"></script>
 </body>
 </html>
