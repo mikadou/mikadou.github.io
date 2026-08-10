@@ -6,6 +6,7 @@
   <title>GNN PPO Feasibility Solver PoC</title>
   <link rel="stylesheet" href="styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/tf-backend-wasm.js"></script>
 </head>
 <body>
   <main>
@@ -106,8 +107,13 @@
       </div>
     </section>
 
+    <section class="card explanation">
+      <h2>Browser backend</h2>
+      <p>TensorFlow.js now runs this experiment on the WASM backend by default, with CPU fallback. WebGL is deliberately avoided so long PPO runs and large held-out benchmarks cannot fail on browser shader compilation/linking.</p>
+    </section>
+
     <footer>Everything runs locally in your browser. No training data or model state is uploaded.</footer>
   </main>
-  <script type="module" src="app-gnn-ppo.js?v=20260810-18"></script>
+  <script type="module" src="app-gnn-ppo-loader.js?v=20260810-19"></script>
 </body>
 </html>
