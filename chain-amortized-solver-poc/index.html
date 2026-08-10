@@ -12,8 +12,8 @@
   <main>
     <header>
       <p class="eyebrow">Proof of concept · typed GNN + PPO actor-critic</p>
-      <h1>Can a factor-graph GNN learn a feasible construction from terminal reward alone?</h1>
-      <p class="lede">Every variable has integer domain <code>0…1000</code>. The only constraints are <code>x₀ &lt; x₁ &lt; … &lt; xₙ₋₁</code>. The actor chooses both the variable and value, gets up to <code>3n</code> moves with overwrites, and receives no intermediate feasibility feedback. A complete feasible chain ends the episode immediately with <code>+1</code>; exhausting the budget gives <code>−1</code>.</p>
+      <h1>Can a factor-graph GNN learn a feasible construction from terminal reward?</h1>
+      <p class="lede">Every variable has integer domain <code>0…1000</code>. The only constraints are <code>x₀ &lt; x₁ &lt; … &lt; xₙ₋₁</code>. The actor chooses both the variable and value, gets up to <code>3n</code> moves with overwrites, and receives no intermediate feasibility feedback. Reward is computed only at episode termination from the fraction of satisfied constraints, with a strong bonus for a complete solution and an additional efficiency bonus for solving in fewer moves.</p>
     </header>
 
     <section class="card controls">
@@ -92,12 +92,13 @@
     </section>
 
     <section class="card explanation">
-      <h2>Curriculum and reward</h2>
+      <h2>Curriculum and terminal reward</h2>
       <div class="grid two text-grid">
         <div>
-          <h3>Terminal reward only</h3>
+          <h3>Graded terminal signal</h3>
           <p>The first <code>n</code> moves ensure every variable has an initial value. Later moves may overwrite any variable. The episode terminates immediately when the full assignment becomes strictly increasing, or at the <code>3n</code> cap.</p>
-          <p>There is no propagation or intermediate feasibility oracle. Rewards are zero until the terminal transition, which is <code>+1</code> for success or <code>−1</code> for failure.</p>
+          <p>There is still no propagation or per-step feasibility oracle. At termination, the base reward is the fraction of adjacent constraints <code>xᵢ &lt; xᵢ₊₁</code> that are satisfied. A failure therefore scores from <code>0</code> up to but not including <code>1</code>.</p>
+          <p>A complete feasible solution gets an additional <code>+2</code>, plus an efficiency bonus from <code>0</code> to <code>1</code>. Solving at the full <code>3n</code> budget scores <code>3</code>; solving in the minimum <code>n</code> moves scores the maximum <code>4</code>.</p>
         </div>
         <div>
           <h3>Greedy-driven promotion</h3>
@@ -114,6 +115,6 @@
 
     <footer>Everything runs locally in your browser. No training data or model state is uploaded.</footer>
   </main>
-  <script type="module" src="app-gnn-ppo-loader.js?v=20260810-20"></script>
+  <script type="module" src="app-gnn-ppo-loader.js?v=20260810-21"></script>
 </body>
 </html>
