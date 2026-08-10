@@ -207,7 +207,7 @@ function scoreActionTensor(actionX) {
 
 // Until every variable has been assigned once, actions are restricted to unassigned
 // variables so the first n moves always create a complete assignment. After that,
-// every variable is selectable again, allowing the remaining 2n moves to repair it.
+// every variable is selectable again, allowing up to 2n further moves to repair it.
 function allActions(state) {
   const actions = [];
   const correctionPhase = state.assignedCount === state.n;
@@ -261,6 +261,8 @@ function rollout(n, rng, stochastic = true, temperature = 1.0) {
   const state = emptyState(n);
   const trajectory = [];
   const maxMoves = MOVE_MULTIPLIER * n;
+  let moves = 0;
+  let solved = false;
 
   for (let move = 0; move < maxMoves; move++) {
     const actions = allActions(state);
@@ -277,13 +279,21 @@ function rollout(n, rng, stochastic = true, temperature = 1.0) {
       state.assignedCount++;
     }
     state.values[action.i] = action.v;
+    moves = move + 1;
+
+    // A feasible full assignment is terminal. There is no intermediate reward:
+    // this check only determines whether the episode can end with its +1 terminal return.
+    if (state.assignedCount === n && isStrictChain(state.values)) {
+      solved = true;
+      break;
+    }
   }
 
   return {
-    solved: state.assignedCount === n && isStrictChain(state.values),
+    solved,
     x: Int16Array.from(state.values),
     trajectory,
-    moves: maxMoves
+    moves
   };
 }
 
@@ -380,7 +390,7 @@ async function trainRL() {
     }
 
     if (ep % 10 === 0 || ep === total - 1 || readyToPromote) {
-      statusEl.textContent = `Episode ${ep + 1}/${total} · curriculum n=${currentN}${currentN < maxN ? `/${maxN}` : ' (max)'} · terminal success ${(100 * rate).toFixed(0)}% · greedy ${greedySolved ? 'SOLVED' : 'not yet'} · budget ${MOVE_MULTIPLIER}n · T=${temp.toFixed(2)} · promotions ${promotions}${Number.isFinite(lastLoss) ? ` · loss ${lastLoss.toFixed(4)}` : ''}`;
+      statusEl.textContent = `Episode ${ep + 1}/${total} · curriculum n=${currentN}${currentN < maxN ? `/${maxN}` : ' (max)'} · terminal success ${(100 * rate).toFixed(0)}% · greedy ${greedySolved ? 'SOLVED' : 'not yet'} · budget ≤${MOVE_MULTIPLIER}n · T=${temp.toFixed(2)} · promotions ${promotions}${Number.isFinite(lastLoss) ? ` · loss ${lastLoss.toFixed(4)}` : ''}`;
       await tf.nextFrame();
     }
   }
@@ -446,17 +456,27 @@ async function runBenchmark() {
   const trials = 5;
 
   for (const n of benchmarkLengths()) {
-    statusEl.textContent = `Benchmarking ${MOVE_MULTIPLIER}n-move terminal GNN at n=${n}…`;
+    statusEl.textContent = `Benchmarking ≤${MOVE_MULTIPLIER}n-move terminal GNN at n=${n}…`;
     let policySolved = 0;
     let saSolved = 0;
+    const policyMoves = [];
     for (let t = 0; t < trials; t++) {
       const policy = rollout(n, rng, false);
-      if (policy.solved) policySolved++;
+      if (policy.solved) {
+        policySolved++;
+        policyMoves.push(policy.moves);
+      }
       const sa = runSA(n, 120 * n, rng);
       if (sa.solved) saSolved++;
       await tf.nextFrame();
     }
-    rows.push({ n, policySuccess: policySolved / trials, saSuccess: saSolved / trials });
+    policyMoves.sort((a, b) => a - b);
+    rows.push({
+      n,
+      policySuccess: policySolved / trials,
+      saSuccess: saSolved / trials,
+      policyMoves: policyMoves.length ? policyMoves[Math.floor(policyMoves.length / 2)] : NaN
+    });
   }
 
   drawScaling(rows);
@@ -468,10 +488,10 @@ async function runBenchmark() {
 
   $('policySuccess').textContent = `${Math.round(100 * longest.policySuccess)}%`;
   $('saSuccess').textContent = `${Math.round(100 * longest.saSuccess)}%`;
-  $('policyMoves').textContent = (MOVE_MULTIPLIER * n).toString();
+  $('policyMoves').textContent = Number.isFinite(longest.policyMoves) ? Math.round(longest.policyMoves).toString() : '—';
   $('saEffort').textContent = (120 * n).toLocaleString();
-  $('metricLength').textContent = `n=${n} · domain 0…${DOMAIN_MAX} · terminal reward · ${MOVE_MULTIPLIER}n moves`;
-  statusEl.textContent = `Done. The GNN gets ${MOVE_MULTIPLIER * n} joint (i,v) choices: n initial assignments plus ${2 * n} overwrite opportunities. Feasibility is checked only at the end.`;
+  $('metricLength').textContent = `n=${n} · domain 0…${DOMAIN_MAX} · terminal reward · ≤${MOVE_MULTIPLIER}n moves`;
+  statusEl.textContent = `Done. The GNN gets up to ${MOVE_MULTIPLIER * n} joint (i,v) choices and stops immediately when it first reaches a feasible full assignment.`;
 
   trainBtn.disabled = false;
   benchmarkBtn.disabled = false;
@@ -571,7 +591,7 @@ benchmarkBtn.addEventListener('click', () => runBenchmark().catch(err => {
 
 if (window.tf) {
   tf.ready().then(() => {
-    statusEl.textContent = `TensorFlow.js ready · backend: ${tf.getBackend()}. Train the ${MOVE_MULTIPLIER}n-move terminal-reward GNN curriculum to begin.`;
+    statusEl.textContent = `TensorFlow.js ready · backend: ${tf.getBackend()}. Train the ≤${MOVE_MULTIPLIER}n-move terminal-reward GNN curriculum to begin.`;
   });
 } else {
   statusEl.textContent = 'TensorFlow.js failed to load.';
