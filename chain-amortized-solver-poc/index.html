@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>GNN PPO Hybrid Feasibility Solver PoC</title>
+  <title>Small-GNN PPO Ablation PoC</title>
   <link rel="stylesheet" href="styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/tf-backend-wasm.js"></script>
@@ -11,9 +11,9 @@
 <body>
   <main>
     <header>
-      <p class="eyebrow">Proof of concept · typed GNN + PPO + annealed search</p>
-      <h1>Can a learned construction policy become a useful search heuristic?</h1>
-      <p class="lede">Every variable has integer domain <code>0…1000</code>. The only constraints are <code>x₀ &lt; x₁ &lt; … &lt; xₙ₋₁</code>. PPO training stays deliberately short-horizon: at most <code>3n</code> moves, with terminal reward from satisfied constraints, a strong full-solution bonus, and an efficiency bonus. Benchmark solving is now different: the trained GNN seeds the assignment and guides a longer <code>30n</code> stochastic search with annealed ε-random moves and simulated-annealing acceptance.</p>
+      <p class="eyebrow">Proof of concept · representation ablation</p>
+      <h1>Is message passing making the trivial feasibility rule harder to learn?</h1>
+      <p class="lede">The environment is unchanged: integer variables in <code>0…1000</code>, only <code>x₀ &lt; x₁ &lt; … &lt; xₙ₋₁</code>, the policy chooses both <code>i</code> and <code>v</code>, training gets at most <code>3n</code> moves, and reward is computed only at episode termination. This version deliberately shrinks the representation and lets us compare <code>0 / 1 / 2 / 6</code> message-passing rounds directly.</p>
     </header>
 
     <section class="card controls">
@@ -29,108 +29,103 @@
         <label>RL episodes <span id="episodesLabel">1000</span></label>
         <input id="episodes" type="range" min="100" max="5000" step="100" value="1000" />
       </div>
+      <div>
+        <label for="messageRounds">Message-passing rounds</label>
+        <select id="messageRounds">
+          <option value="0">0 — encoder only</option>
+          <option value="1" selected>1 — minimal GNN</option>
+          <option value="2">2 — local propagation</option>
+          <option value="6">6 — previous model</option>
+        </select>
+      </div>
       <div class="buttons">
-        <button id="trainBtn">Train PPO GNN</button>
-        <button id="benchmarkBtn" class="secondary" disabled>Run hybrid benchmark</button>
+        <button id="trainBtn">Train small PPO GNN</button>
+        <button id="benchmarkBtn" class="secondary" disabled>Run direct benchmark</button>
       </div>
       <div id="status" class="status">TensorFlow.js is loading…</div>
     </section>
 
     <section class="metrics">
-      <article class="metric"><span>Hybrid solve rate</span><strong id="policySuccess">—</strong><small>at longest test length</small></article>
+      <article class="metric"><span>Direct PPO solve rate</span><strong id="policySuccess">—</strong><small>at longest test length</small></article>
       <article class="metric"><span>SA solve rate</span><strong id="saSuccess">—</strong><small>at longest test length</small></article>
-      <article class="metric"><span>Hybrid moves</span><strong id="policyMoves">—</strong><small>median moves when solved</small></article>
+      <article class="metric"><span>PPO choices</span><strong id="policyMoves">—</strong><small>median moves when solved</small></article>
       <article class="metric"><span>SA effort</span><strong id="saEffort">—</strong><small>proposals / trial</small></article>
     </section>
     <p class="status">Headline benchmark: <strong id="metricLength">—</strong></p>
 
     <section class="grid two">
       <article class="card">
-        <h2>Size generalization</h2>
-        <p>The same typed message-passing weights and actor/critic heads are reused on larger factor graphs. The dashed line marks the largest size actually reached by the PPO curriculum; beyond that, the benchmark tests whether the learned policy remains useful inside longer search.</p>
+        <h2>Direct size generalization</h2>
+        <p>No 30n hybrid search here. Blue is the trained policy itself with the same <code>3n</code> move limit used in training. This keeps the ablation focused on whether the representation and PPO training learn the simple construction rule.</p>
         <canvas id="scalingChart" width="760" height="360"></canvas>
-        <div class="legend"><span><i class="dot policy"></i> PPO-guided hybrid search</span><span><i class="dot sa"></i> simulated annealing</span></div>
+        <div class="legend"><span><i class="dot policy"></i> direct PPO policy</span><span><i class="dot sa"></i> simulated annealing</span></div>
       </article>
       <article class="card">
         <h2>Longest held-out chain</h2>
-        <p>Blue is the best incumbent found by PPO-guided search within <code>30n</code> moves; orange is simulated annealing after its own budget. Any strictly increasing curve inside <code>0…1000</code> is feasible.</p>
+        <p>Blue is the assignment left by the direct PPO policy when it reaches feasibility or exhausts <code>3n</code> moves; orange is simulated annealing. Any strictly increasing curve inside <code>0…1000</code> is feasible.</p>
         <canvas id="instanceChart" width="760" height="360"></canvas>
-        <div class="legend"><span><i class="dot policy"></i> PPO-guided hybrid</span><span><i class="dot sa"></i> SA</span></div>
+        <div class="legend"><span><i class="dot policy"></i> direct PPO policy</span><span><i class="dot sa"></i> SA</span></div>
       </article>
     </section>
 
     <section class="card explanation">
-      <h2>Graph representation</h2>
+      <h2>What changed</h2>
       <div class="grid two text-grid">
         <div>
-          <h3>Two node types</h3>
-          <p><strong>Variable nodes</strong> <code>Vᵢ</code> carry a variable-type bit, normalized node ID <code>i/(n−1)</code>, assignment status, and assigned value when present.</p>
-          <p><strong>Constraint nodes</strong> <code>Gₖ</code> represent <code>xₖ₊₁ &gt; xₖ</code> and carry their own type bit and normalized constraint ID.</p>
+          <h3>Much smaller representation</h3>
+          <p>Node embeddings are now <strong>8-dimensional</strong> instead of 24-dimensional. The normalized semantic node position <code>i/(n−1)</code> is still an input feature, so the model has direct access to the simple positional signal.</p>
+          <p>The selected message depth can be <code>0</code>, <code>1</code>, <code>2</code>, or <code>6</code>. At depth <code>0</code>, the variable actor sees only the encoded node features: there is no graph mixing at all.</p>
         </div>
         <div>
-          <h3>Typed message passing</h3>
-          <p>Four directed edge types distinguish smaller-operand and greater-operand roles in both directions. Each edge type has its own learned message matrix.</p>
-          <p>Six residual message-passing rounds produce 24-dimensional node embeddings. There is no raw node-ID bypass around the GNN.</p>
+          <h3>Stabilized message updates</h3>
+          <p>When message passing is enabled, each residual message update is normalized across the embedding dimensions before the ReLU. This is intentionally simple row-wise LayerNorm-style normalization rather than another learned module.</p>
+          <p>The goal is to preserve the positional signal instead of repeatedly amplifying or distorting it through six unnormalized recurrent graph updates.</p>
         </div>
       </div>
     </section>
 
     <section class="card explanation">
-      <h2>Factorized PPO actor-critic</h2>
+      <h2>Cleaner PPO experiment</h2>
       <div class="grid two text-grid">
         <div>
-          <h3>Still chooses both <code>i</code> and <code>v</code></h3>
-          <p>The actor first samples which variable to modify from a categorical distribution over variable-node embeddings. The chosen variable embedding then produces a Gaussian <code>(μ, σ)</code> over a continuous latent value; a sigmoid maps that latent into integer <code>v∈0…1000</code>.</p>
-          <p>This replaces one giant <code>n×1001</code> categorical action with <code>π(i|s)π(v|s,i)</code>, while leaving the policy responsible for both decisions.</p>
+          <h3>Larger rollout batches</h3>
+          <p>PPO now collects <strong>32 episodes per update</strong> instead of 4. That should reduce the variance of the terminal-reward policy gradient substantially, especially at the tiny curriculum sizes where the old implementation updated from only a handful of transitions.</p>
         </div>
         <div>
-          <h3>PPO + learned critic</h3>
-          <p>A critic pools the GNN embeddings and predicts <code>V(s)</code>. Batches of episodes use generalized advantage estimation (GAE), clipped PPO policy updates, a value loss, and a small entropy bonus.</p>
-          <p>Successful trajectories are also kept in a small self-imitation buffer. Those are generated only by the agent itself from terminal successes; there are still no solver labels or target assignments.</p>
+          <h3>No self-imitation</h3>
+          <p>The successful-trajectory replay auxiliary loss is disabled. Training is now just the small actor-critic GNN, PPO/GAE, entropy regularization, and the terminal reward. This removes one more mechanism that could obscure what is actually helping.</p>
         </div>
       </div>
     </section>
 
     <section class="card explanation">
-      <h2>Curriculum and terminal reward</h2>
+      <h2>Environment and reward are unchanged</h2>
       <div class="grid two text-grid">
         <div>
-          <h3>Graded terminal signal</h3>
-          <p>The first <code>n</code> training moves ensure every variable has an initial value. Later training moves may overwrite any variable. The episode terminates immediately when the full assignment becomes strictly increasing, or at the <code>3n</code> cap.</p>
-          <p>There is still no propagation or per-step feasibility oracle. At termination, the base reward is the fraction of adjacent constraints <code>xᵢ &lt; xᵢ₊₁</code> that are satisfied. A failure therefore scores from <code>0</code> up to but not including <code>1</code>.</p>
-          <p>A complete feasible solution gets an additional <code>+2</code>, plus an efficiency bonus from <code>0</code> to <code>1</code>. Solving at the full <code>3n</code> training budget scores <code>3</code>; solving in the minimum <code>n</code> moves scores the maximum <code>4</code>.</p>
+          <h3>Same joint decisions</h3>
+          <p>The actor still chooses both the variable <code>i</code> and value <code>v</code>. Variable choice is categorical; the selected variable embedding parameterizes a Gaussian latent that maps through a sigmoid to integer <code>v∈0…1000</code>.</p>
+          <p>The first <code>n</code> moves assign every variable once; the remaining training budget can overwrite variables, with immediate termination on a feasible full chain.</p>
         </div>
         <div>
-          <h3>Greedy-driven promotion</h3>
-          <p>Training concentrates on the current curriculum size but mixes in previous sizes to reduce forgetting. Every few PPO updates, the deterministic greedy actor is evaluated separately.</p>
-          <p>The curriculum promotes to <code>n+1</code> after enough current-size experience and at least 80% greedy solve rate. Exploratory stochastic success is displayed for diagnosis but no longer blocks promotion.</p>
+          <h3>Same terminal shaping</h3>
+          <p>There is no propagation and no per-step feasibility oracle. At episode termination, a failed assignment receives the fraction of adjacent <code>xᵢ &lt; xᵢ₊₁</code> constraints satisfied.</p>
+          <p>A complete solution receives an additional <code>+2</code> plus an efficiency bonus up to <code>+1</code>, so solving in exactly <code>n</code> moves still gives the maximum reward <code>4</code>.</p>
         </div>
       </div>
     </section>
 
     <section class="card explanation">
-      <h2>Long-horizon deployment search</h2>
-      <div class="grid two text-grid">
-        <div>
-          <h3>Learned proposals + ε exploration</h3>
-          <p>The solver first builds a complete assignment using the deterministic PPO policy. It then gets up to <code>30n</code> total moves. Most correction proposals come from the learned actor; ε-random moves start at <code>20%</code> and anneal to <code>1%</code>.</p>
-          <p>Random proposals are mostly local value perturbations whose radius shrinks over time, with occasional global random values to escape larger traps.</p>
-        </div>
-        <div>
-          <h3>Annealed acceptance + incumbent</h3>
-          <p>Search energy is the summed magnitude of adjacent strict-order violations. Improving moves are always accepted; worsening moves may be accepted with a simulated-annealing probability whose temperature decays from hot to cold.</p>
-          <p>The best assignment ever seen is stored separately. Exploration can therefore move through worse states without losing the incumbent, and search stops immediately when a feasible chain is found.</p>
-        </div>
-      </div>
+      <h2>How to read the ablation</h2>
+      <p>Start with <strong>0 rounds</strong>. If that learns quickly, the sequential PPO/action formulation is viable and graph mixing was the main problem. Then try <strong>1</strong> and <strong>2</strong> rounds. If performance degrades monotonically with depth, we have direct evidence that the old six-round GNN was destroying an already-sufficient positional representation rather than adding useful structure.</p>
     </section>
 
     <section class="card explanation">
       <h2>Browser backend</h2>
-      <p>On Android, TensorFlow.js uses the CPU backend for reliability. This avoids both WebGL shader-link failures and missing WASM kernels such as <code>UnsortedSegmentSum</code>. Other platforms still prefer WASM with CPU fallback.</p>
+      <p>On Android, TensorFlow.js uses the CPU backend for reliability. Other platforms prefer WASM with CPU fallback.</p>
     </section>
 
     <footer>Everything runs locally in your browser. No training data or model state is uploaded.</footer>
   </main>
-  <script type="module" src="app-gnn-ppo-loader.js?v=20260811-22"></script>
+  <script type="module" src="app-gnn-ppo-loader.js?v=20260811-23"></script>
 </body>
 </html>
