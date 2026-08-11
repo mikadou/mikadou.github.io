@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Small-GNN PPO Ablation PoC</title>
+  <title>Scale-Aware PPO Feasibility PoC</title>
   <link rel="stylesheet" href="styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/tf-backend-wasm.js"></script>
@@ -11,18 +11,18 @@
 <body>
   <main>
     <header>
-      <p class="eyebrow">Proof of concept · representation ablation</p>
-      <h1>Is message passing making the trivial feasibility rule harder to learn?</h1>
-      <p class="lede">The environment is unchanged: integer variables in <code>0…1000</code>, only <code>x₀ &lt; x₁ &lt; … &lt; xₙ₋₁</code>, the policy chooses both <code>i</code> and <code>v</code>, training gets at most <code>3n</code> moves, and reward is computed only at episode termination. This version deliberately shrinks the representation and lets us compare <code>0 / 1 / 2 / 6</code> message-passing rounds directly.</p>
+      <p class="eyebrow">Proof of concept · scale-aware representation</p>
+      <h1>Can PPO learn a size-independent integer-spacing rule?</h1>
+      <p class="lede">The environment is unchanged: integer variables in <code>0…1000</code>, only <code>x₀ &lt; x₁ &lt; … &lt; xₙ₋₁</code>, the policy chooses both <code>i</code> and <code>v</code>, training gets at most <code>3n</code> moves, and reward is computed only at episode termination. The key fix is that node features now expose absolute position and problem size as well as relative position, and training samples uniformly across the full selected size range instead of progressing through one tiny curriculum size at a time.</p>
     </header>
 
     <section class="card controls">
       <div>
-        <label>Curriculum start length <span id="trainMinNLabel">2</span></label>
+        <label>Training min length <span id="trainMinNLabel">2</span></label>
         <input id="trainMinN" type="range" min="2" max="12" step="1" value="2" />
       </div>
       <div>
-        <label>Curriculum target length <span id="trainMaxNLabel">20</span></label>
+        <label>Training max length <span id="trainMaxNLabel">20</span></label>
         <input id="trainMaxN" type="range" min="2" max="30" step="1" value="20" />
       </div>
       <div>
@@ -32,14 +32,14 @@
       <div>
         <label for="messageRounds">Message-passing rounds</label>
         <select id="messageRounds">
-          <option value="0">0 — encoder only</option>
-          <option value="1" selected>1 — minimal GNN</option>
+          <option value="0" selected>0 — encoder only</option>
+          <option value="1">1 — minimal GNN</option>
           <option value="2">2 — local propagation</option>
           <option value="6">6 — previous model</option>
         </select>
       </div>
       <div class="buttons">
-        <button id="trainBtn">Train small PPO GNN</button>
+        <button id="trainBtn">Train scale-aware PPO</button>
         <button id="benchmarkBtn" class="secondary" disabled>Run direct benchmark</button>
       </div>
       <div id="status" class="status">TensorFlow.js is loading…</div>
@@ -56,44 +56,46 @@
     <section class="grid two">
       <article class="card">
         <h2>Direct size generalization</h2>
-        <p>No 30n hybrid search here. Blue is the trained policy itself with the same <code>3n</code> move limit used in training. This keeps the ablation focused on whether the representation and PPO training learn the simple construction rule.</p>
+        <p>Blue is the trained PPO policy itself with the same <code>3n</code> move cap used during training. The dashed line marks the maximum size included in the mixed-size training distribution. Sizes to the right are true held-out extrapolation.</p>
         <canvas id="scalingChart" width="760" height="360"></canvas>
         <div class="legend"><span><i class="dot policy"></i> direct PPO policy</span><span><i class="dot sa"></i> simulated annealing</span></div>
       </article>
       <article class="card">
         <h2>Longest held-out chain</h2>
-        <p>Blue is the assignment left by the direct PPO policy when it reaches feasibility or exhausts <code>3n</code> moves; orange is simulated annealing. Any strictly increasing curve inside <code>0…1000</code> is feasible.</p>
+        <p>Blue is the assignment left by the direct PPO policy when it reaches feasibility or exhausts <code>3n</code> moves; orange is simulated annealing. Any strictly increasing integer curve inside <code>0…1000</code> is feasible.</p>
         <canvas id="instanceChart" width="760" height="360"></canvas>
         <div class="legend"><span><i class="dot policy"></i> direct PPO policy</span><span><i class="dot sa"></i> SA</span></div>
       </article>
     </section>
 
     <section class="card explanation">
-      <h2>What changed</h2>
+      <h2>Scale-aware node features</h2>
       <div class="grid two text-grid">
         <div>
-          <h3>Much smaller representation</h3>
-          <p>Node embeddings are now <strong>8-dimensional</strong> instead of 24-dimensional. The normalized semantic node position <code>i/(n−1)</code> is still an input feature, so the model has direct access to the simple positional signal.</p>
-          <p>The selected message depth can be <code>0</code>, <code>1</code>, <code>2</code>, or <code>6</code>. At depth <code>0</code>, the variable actor sees only the encoded node features: there is no graph mixing at all.</p>
+          <h3>Seven features per node</h3>
+          <p>Variable nodes now carry <code>[type-var, type-constraint, absolute position, relative position, problem size, assigned, value]</code>. With <code>MAX_TEST_N=100</code>, the key static features are <code>i/99</code>, <code>i/(n−1)</code>, and <code>n/100</code>.</p>
+          <p>This means a size-independent construction such as <code>v ≈ k·i + b</code> is representable directly. Previously, an unassigned node at zero message rounds effectively knew only <code>i/(n−1)</code>, which encouraged a fixed output curve whose integer gaps collapse as <code>n</code> grows.</p>
         </div>
         <div>
-          <h3>Stabilized message updates</h3>
-          <p>When message passing is enabled, each residual message update is normalized across the embedding dimensions before the ReLU. This is intentionally simple row-wise LayerNorm-style normalization rather than another learned module.</p>
-          <p>The goal is to preserve the positional signal instead of repeatedly amplifying or distorting it through six unnormalized recurrent graph updates.</p>
+          <h3>Constraint nodes use the same scale</h3>
+          <p>Constraint nodes receive analogous absolute and relative positions plus the same problem-size feature. Assignment status and assigned value remain zero for constraint nodes.</p>
+          <p>The 8-dimensional encoder remains shared across graph sizes. No raw node-ID bypass is added to the action head; all features still pass through the learned node encoder first.</p>
         </div>
       </div>
     </section>
 
     <section class="card explanation">
-      <h2>Cleaner PPO experiment</h2>
+      <h2>Mixed-size PPO training</h2>
       <div class="grid two text-grid">
         <div>
-          <h3>Larger rollout batches</h3>
-          <p>PPO now collects <strong>32 episodes per update</strong> instead of 4. That should reduce the variance of the terminal-reward policy gradient substantially, especially at the tiny curriculum sizes where the old implementation updated from only a handful of transitions.</p>
+          <h3>Uniform across the selected range</h3>
+          <p>Each episode now samples <code>n</code> uniformly between the configured training minimum and maximum. A run configured as <code>2…20</code> therefore trains on all of those lengths throughout the run instead of concentrating on one current curriculum size.</p>
+          <p>This removes the shortcut where PPO only needs enough output slope for tiny chains before moving on.</p>
         </div>
         <div>
-          <h3>No self-imitation</h3>
-          <p>The successful-trajectory replay auxiliary loss is disabled. Training is now just the small actor-critic GNN, PPO/GAE, entropy regularization, and the terminal reward. This removes one more mechanism that could obscure what is actually helping.</p>
+          <h3>Cleaner optimization setup</h3>
+          <p>PPO still collects <strong>32 episodes per update</strong>, uses the 8-dimensional encoder, GAE, clipped PPO, a learned critic, and entropy regularization. Self-imitation remains disabled.</p>
+          <p><strong>0 message rounds is now the default</strong>. That isolates the scale fix first. Once the zero-round model works, 1/2/6 rounds can be compared again without changing the environment or reward.</p>
         </div>
       </div>
     </section>
@@ -103,20 +105,20 @@
       <div class="grid two text-grid">
         <div>
           <h3>Same joint decisions</h3>
-          <p>The actor still chooses both the variable <code>i</code> and value <code>v</code>. Variable choice is categorical; the selected variable embedding parameterizes a Gaussian latent that maps through a sigmoid to integer <code>v∈0…1000</code>.</p>
-          <p>The first <code>n</code> moves assign every variable once; the remaining training budget can overwrite variables, with immediate termination on a feasible full chain.</p>
+          <p>The actor still chooses both variable <code>i</code> and value <code>v</code>. Variable choice is categorical; the selected variable embedding parameterizes a Gaussian latent mapped through a sigmoid to integer <code>v∈0…1000</code>.</p>
+          <p>The first <code>n</code> moves assign every variable once; the remaining training budget may overwrite variables, with immediate termination on a feasible full chain.</p>
         </div>
         <div>
           <h3>Same terminal shaping</h3>
-          <p>There is no propagation and no per-step feasibility oracle. At episode termination, a failed assignment receives the fraction of adjacent <code>xᵢ &lt; xᵢ₊₁</code> constraints satisfied.</p>
+          <p>There is no propagation and no per-step feasibility oracle. At termination, a failed assignment receives the fraction of adjacent <code>xᵢ &lt; xᵢ₊₁</code> constraints satisfied.</p>
           <p>A complete solution receives an additional <code>+2</code> plus an efficiency bonus up to <code>+1</code>, so solving in exactly <code>n</code> moves still gives the maximum reward <code>4</code>.</p>
         </div>
       </div>
     </section>
 
     <section class="card explanation">
-      <h2>How to read the ablation</h2>
-      <p>Start with <strong>0 rounds</strong>. If that learns quickly, the sequential PPO/action formulation is viable and graph mixing was the main problem. Then try <strong>1</strong> and <strong>2</strong> rounds. If performance degrades monotonically with depth, we have direct evidence that the old six-round GNN was destroying an already-sufficient positional representation rather than adding useful structure.</p>
+      <h2>What this test should tell us</h2>
+      <p>If <strong>0 rounds</strong> now generalizes substantially better beyond the training maximum, the previous failure was largely a representation/scale mismatch. If it still fails despite explicit <code>i</code>-scale and <code>n</code> features plus mixed-size training, then the remaining bottleneck is much more likely the sequential PPO action formulation or Gaussian value parameterization rather than the GNN.</p>
     </section>
 
     <section class="card explanation">
@@ -126,7 +128,6 @@
 
     <footer>Everything runs locally in your browser. No training data or model state is uploaded.</footer>
   </main>
-  <!-- deployment sync: ablation UI + engine -->
-  <script type="module" src="app-gnn-ppo-loader.js?v=20260811-24"></script>
+  <script type="module" src="app-gnn-ppo-loader.js?v=20260812-25"></script>
 </body>
 </html>
