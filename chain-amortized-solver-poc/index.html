@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>GNN Imitation of Local Repair Heuristic</title>
+  <title>GNN Local Repair Endpoint Classifier</title>
   <link rel="stylesheet" href="styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/tf-backend-wasm.js"></script>
@@ -11,9 +11,9 @@
 <body>
   <main>
     <header>
-      <p class="eyebrow">Proof of concept · corrected imitation learning</p>
-      <h1>Can the typed GNN represent the handcrafted local-repair algorithm?</h1>
-      <p class="lede">This version fixes two bugs in the previous imitation test and removes the remaining covariate-shift excuse. Constraint nodes expose satisfaction state; the GNN learns the teacher's repair-endpoint distribution and <code>N(2i,1)</code> value rule. Construction uses the environment's legal action mask, value error is trained in integer value units, and DAgger-style relabeling trains on states visited by the learner itself.</p>
+      <p class="eyebrow">Proof of concept · endpoint-focused imitation</p>
+      <h1>Can one GNN message step identify the variables touching violated constraints?</h1>
+      <p class="lede">The previous diagnostic showed that the value rule <code>v≈2i</code> was learned, while repair-variable probabilities stayed almost uniform. This version isolates that failure. Training uses only fully assigned repair states, deliberately injects local violations, and trains every variable with a balanced binary target: endpoint of a violated constraint or not. The value distribution is still learned separately so the resulting policy can be tested end-to-end against the handcrafted heuristic.</p>
     </header>
 
     <section class="card controls">
@@ -26,31 +26,31 @@
         <input id="trainMaxN" type="range" min="2" max="30" step="1" value="20" />
       </div>
       <div>
-        <label>Imitation episodes <span id="episodesLabel">1000</span></label>
+        <label>Repair training states <span id="episodesLabel">1000</span></label>
         <input id="episodes" type="range" min="100" max="5000" step="100" value="1000" />
       </div>
       <div>
         <label for="messageRounds">Message-passing rounds</label>
         <select id="messageRounds">
           <option value="0">0 — negative control</option>
-          <option value="1" selected>1 — minimal repair GNN</option>
+          <option value="1" selected>1 — minimal endpoint GNN</option>
           <option value="2">2 — extra local context</option>
           <option value="6">6 — deep recurrent propagation</option>
         </select>
       </div>
       <div class="buttons">
-        <button id="trainBtn">Train imitation GNN</button>
+        <button id="trainBtn">Train endpoint GNN</button>
         <button id="benchmarkBtn" class="secondary" disabled>Run comparison</button>
       </div>
       <div id="status" class="status">TensorFlow.js is loading…</div>
     </section>
 
     <section class="metrics">
-      <article class="metric"><span>Imitation GNN solve rate</span><strong id="policySuccess">—</strong><small>at longest test length</small></article>
+      <article class="metric"><span>Endpoint-GNN solve rate</span><strong id="policySuccess">—</strong><small>at longest test length</small></article>
       <article class="metric"><span>Teacher solve rate</span><strong id="heuristicSuccess">—</strong><small>at longest test length</small></article>
       <article class="metric"><span>SA solve rate</span><strong id="saSuccess">—</strong><small>at longest test length</small></article>
-      <article class="metric"><span>Repair candidate mass</span><strong id="candidateMass">—</strong><small>probability on teacher-valid endpoints</small></article>
-      <article class="metric"><span>Value mean MAE</span><strong id="meanMae">—</strong><small>integer units on trained-size states</small></article>
+      <article class="metric"><span>Endpoint F1</span><strong id="candidateMass">—</strong><small>repair-only states at training max</small></article>
+      <article class="metric"><span>Value mean MAE</span><strong id="meanMae">—</strong><small>integer units at training max</small></article>
       <article class="metric"><span>GNN choices</span><strong id="policyMoves">—</strong><small>median moves when solved</small></article>
       <article class="metric"><span>Teacher choices</span><strong id="heuristicMoves">—</strong><small>median moves when solved</small></article>
       <article class="metric"><span>SA effort</span><strong id="saEffort">—</strong><small>proposals / trial</small></article>
@@ -60,66 +60,47 @@
     <section class="grid two">
       <article class="card">
         <h2>Closed-loop solve rate</h2>
-        <p>Blue is the imitation GNN, green is the handcrafted teacher, and orange is simulated annealing. GNN and teacher each get <code>3n</code> assignments. The dashed line marks the maximum training size.</p>
+        <p>Blue is the endpoint-trained GNN policy, green is the handcrafted local-repair teacher, and orange is simulated annealing. GNN and teacher each get <code>3n</code> assignments. The copied diagnostic log also reports a fourth control: the learned value policy with <strong>oracle repair endpoints</strong>.</p>
         <canvas id="scalingChart" width="760" height="360"></canvas>
-        <div class="legend"><span><i class="dot policy"></i> imitation GNN</span><span><i class="dot exact"></i> handcrafted teacher</span><span><i class="dot sa"></i> simulated annealing</span></div>
+        <div class="legend"><span><i class="dot policy"></i> endpoint-trained GNN</span><span><i class="dot exact"></i> handcrafted teacher</span><span><i class="dot sa"></i> simulated annealing</span></div>
       </article>
       <article class="card">
         <h2>Longest held-out chain</h2>
-        <p>The curves show final assignments from the imitation GNN, teacher, and SA on the longest benchmark size.</p>
+        <p>The curves show final assignments from the GNN, teacher, and SA on the longest benchmark size.</p>
         <canvas id="instanceChart" width="760" height="360"></canvas>
-        <div class="legend"><span><i class="dot policy"></i> imitation GNN</span><span><i class="dot exact"></i> handcrafted teacher</span><span><i class="dot sa"></i> SA</span></div>
+        <div class="legend"><span><i class="dot policy"></i> endpoint-trained GNN</span><span><i class="dot exact"></i> handcrafted teacher</span><span><i class="dot sa"></i> SA</span></div>
       </article>
     </section>
 
     <section class="card explanation">
-      <h2>What was wrong in the previous imitation test?</h2>
+      <h2>The repair decision is now a binary node-classification problem</h2>
       <div class="grid two text-grid">
         <div>
-          <h3>Illegal construction choices were not masked</h3>
-          <p>The old imitation policy sampled from all variables even while some variables were still unassigned. Small classification errors could therefore waste the tight <code>3n</code> budget overwriting already-assigned variables before construction was complete.</p>
-          <p>The corrected engine applies the environment's legal action mask: before completion, only unassigned variables are eligible. Once the assignment is complete, all variables become eligible and the network must learn to concentrate probability on violated-constraint endpoints.</p>
+          <h3>Repair-only supervision</h3>
+          <p>Every training example is a fully assigned chain with at least one violated adjacent constraint. Additional local violations are injected so the network sees a strong, frequent repair signal across all selected chain lengths.</p>
+          <p>Construction states are excluded from the endpoint loss. This removes the previous diagnostic artifact where candidate mass was trivially 100% because every unassigned variable was a valid construction choice.</p>
         </div>
         <div>
-          <h3>The value loss was nearly scale-free</h3>
-          <p>The old loss regressed <code>2i/1000</code> with ordinary MSE. A 10–20 integer-unit error therefore cost almost nothing relative to the variable-selection loss, so the network could minimize training loss while predicting nearly the same small value everywhere.</p>
-          <p>The corrected loss works in integer value units with a robust Huber objective. The mean rule <code>2i</code> is supervised on every variable in every labeled state, not only on whichever variables happened to be teacher candidates.</p>
+          <h3>Balanced binary cross-entropy</h3>
+          <p>For each variable <code>i</code>, the target is simply whether it touches at least one violated constraint. Positive and negative losses are averaged separately and weighted equally, so sparse endpoints cannot be overwhelmed by the many non-endpoint variables.</p>
+          <p>At inference, variables scoring at least <code>0.5</code> form the predicted repair set. The solver samples uniformly from that set, matching the handcrafted heuristic's “pick any violated endpoint” behavior.</p>
         </div>
       </div>
     </section>
 
     <section class="card explanation">
-      <h2>Constraint-state graph</h2>
-      <div class="grid two text-grid">
-        <div>
-          <h3>Eight node features</h3>
-          <p>Nodes use <code>[variable type, constraint type, absolute position, relative position, problem size, assigned, value, constraint status]</code>. For constraint nodes, status is <code>+1</code> when violated, <code>-1</code> when satisfied, and <code>0</code> while unresolved.</p>
-        </div>
-        <div>
-          <h3>One message round should suffice</h3>
-          <p>A violated constraint node is directly connected to its two endpoint variables. One typed message round can therefore carry the violation signal to exactly the variables the handcrafted heuristic considers for repair.</p>
-          <p><code>0</code> rounds remains a useful negative control because the variable head then cannot see constraint status.</p>
-        </div>
-      </div>
+      <h2>Why one message round should solve the classification task</h2>
+      <p>Constraint nodes still expose <code>+1</code> when violated, <code>-1</code> when satisfied, and <code>0</code> when unresolved. A violated constraint node is directly connected to its two variable endpoints. With one typed message round, the endpoint predicate is therefore a one-hop graph computation. The <code>0</code>-round setting remains a negative control.</p>
     </section>
 
     <section class="card explanation">
-      <h2>DAgger-style imitation</h2>
-      <div class="grid two text-grid">
-        <div>
-          <h3>Teacher warm-up</h3>
-          <p>Early updates use handcrafted teacher trajectories. Each labeled state carries the complete soft target: uniform over all legal construction choices, or uniform over all endpoints touching at least one violated constraint during repair.</p>
-        </div>
-        <div>
-          <h3>Learner-state relabeling</h3>
-          <p>After warm-up, most batches include trajectories generated by the GNN itself. The handcrafted heuristic labels those visited states. This is DAgger-style dataset aggregation and directly addresses behavior-cloning covariate shift.</p>
-        </div>
-      </div>
+      <h2>Value learning is separated from endpoint learning</h2>
+      <p>The value head still learns the teacher's <code>N(2i,1)</code> rule, but its loss has much smaller weight than the endpoint classifier. The copied benchmark log includes <code>oracleEndpoints</code>: exact repair-node selection combined with the learned value head. If that control solves while the full GNN does not, endpoint classification is still the bottleneck; if it also fails, value prediction is the issue.</p>
     </section>
 
     <section class="card explanation">
-      <h2>Two diagnostics separate representation from closed-loop compounding</h2>
-      <p><strong>Repair candidate mass</strong> measures how much probability the variable head puts on teacher-valid endpoints. <strong>Value mean MAE</strong> measures how closely the value head reproduces <code>2i</code> in integer units. If those become strong while solve rate remains weak, the remaining problem is closed-loop stochastic compounding rather than basic representational capacity.</p>
+      <h2>Diagnostics</h2>
+      <p>Training now reports endpoint precision, recall, and F1 on repair-only states. The copyable log includes endpoint probes, learned value predictions, closed-loop repair traces, and oracle-endpoint solve rates. This should make the next failure mode immediately identifiable.</p>
     </section>
 
     <section class="card explanation">
@@ -129,6 +110,6 @@
 
     <footer>Everything runs locally in your browser. No training data or model state is uploaded.</footer>
   </main>
-  <script type="module" src="app-gnn-ppo-loader.js?v=20260812-30"></script>
+  <script type="module" src="app-gnn-ppo-loader.js?v=20260812-31"></script>
 </body>
 </html>
