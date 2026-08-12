@@ -1,4 +1,4 @@
-// Select a TensorFlow.js backend before the PPO ablation engine is evaluated.
+// Select a TensorFlow.js backend before the PPO comparison engine is evaluated.
 // Android Chrome uses CPU directly for reliability: WebGL has shown shader-link
 // failures and WASM lacks UnsortedSegmentSum for this training graph.
 // Other platforms still prefer WASM, with CPU as the fallback.
@@ -33,8 +33,8 @@ async function boot() {
     }
 
     const platformNote = isAndroid ? ' · Android reliability mode' : '';
-    if (statusEl) statusEl.textContent = `TensorFlow.js ready · backend: ${backend}${platformNote}. Loading scale-aware PPO ablation…`;
-    await import('./app-gnn-ppo-ablation.js?v=20260812-25');
+    if (statusEl) statusEl.textContent = `TensorFlow.js ready · backend: ${backend}${platformNote}. Loading PPO / handcrafted / SA comparison…`;
+    await import('./app-gnn-ppo-ablation.js?v=20260812-26');
   } catch (err) {
     console.error(err);
     if (statusEl) statusEl.textContent = `Error initializing TensorFlow.js backend: ${err.message}`;
