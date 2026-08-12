@@ -11,9 +11,9 @@
 <body>
   <main>
     <header>
-      <p class="eyebrow">Proof of concept · behavior cloning</p>
+      <p class="eyebrow">Proof of concept · corrected imitation learning</p>
       <h1>Can the typed GNN represent the handcrafted local-repair algorithm?</h1>
-      <p class="lede">This experiment removes RL credit assignment completely. A handcrafted teacher generates trajectories. Constraint nodes explicitly expose whether their current <code>xᵢ &lt; xᵢ₊₁</code> relation is violated, satisfied, or unresolved. The GNN is trained by imitation to reproduce the teacher's variable-selection distribution and its <code>N(2i,1)</code> value distribution. At inference, the GNN is not given the teacher's repair mask: it must recover the local-repair behavior from graph state and message passing.</p>
+      <p class="lede">This version fixes two bugs in the previous imitation test and removes the remaining covariate-shift excuse. Constraint nodes expose satisfaction state; the GNN learns the teacher's repair-endpoint distribution and <code>N(2i,1)</code> value rule. Construction uses the environment's legal action mask, value error is trained in integer value units, and DAgger-style relabeling trains on states visited by the learner itself.</p>
     </header>
 
     <section class="card controls">
@@ -26,13 +26,13 @@
         <input id="trainMaxN" type="range" min="2" max="30" step="1" value="20" />
       </div>
       <div>
-        <label>Teacher episodes <span id="episodesLabel">1000</span></label>
+        <label>Imitation episodes <span id="episodesLabel">1000</span></label>
         <input id="episodes" type="range" min="100" max="5000" step="100" value="1000" />
       </div>
       <div>
         <label for="messageRounds">Message-passing rounds</label>
         <select id="messageRounds">
-          <option value="0">0 — no access to constraint state</option>
+          <option value="0">0 — negative control</option>
           <option value="1" selected>1 — minimal repair GNN</option>
           <option value="2">2 — extra local context</option>
           <option value="6">6 — deep recurrent propagation</option>
@@ -49,6 +49,8 @@
       <article class="metric"><span>Imitation GNN solve rate</span><strong id="policySuccess">—</strong><small>at longest test length</small></article>
       <article class="metric"><span>Teacher solve rate</span><strong id="heuristicSuccess">—</strong><small>at longest test length</small></article>
       <article class="metric"><span>SA solve rate</span><strong id="saSuccess">—</strong><small>at longest test length</small></article>
+      <article class="metric"><span>Repair candidate mass</span><strong id="candidateMass">—</strong><small>probability on teacher-valid endpoints</small></article>
+      <article class="metric"><span>Value mean MAE</span><strong id="meanMae">—</strong><small>integer units on trained-size states</small></article>
       <article class="metric"><span>GNN choices</span><strong id="policyMoves">—</strong><small>median moves when solved</small></article>
       <article class="metric"><span>Teacher choices</span><strong id="heuristicMoves">—</strong><small>median moves when solved</small></article>
       <article class="metric"><span>SA effort</span><strong id="saEffort">—</strong><small>proposals / trial</small></article>
@@ -57,69 +59,67 @@
 
     <section class="grid two">
       <article class="card">
-        <h2>Can the network clone the algorithm?</h2>
-        <p>Blue is the behavior-cloned GNN, green is the handcrafted teacher, and orange is simulated annealing. The GNN and teacher both get the same total <code>3n</code> assignment budget. The dashed line marks the maximum training size; larger sizes test whether the learned local algorithm extrapolates.</p>
+        <h2>Closed-loop solve rate</h2>
+        <p>Blue is the imitation GNN, green is the handcrafted teacher, and orange is simulated annealing. GNN and teacher each get <code>3n</code> assignments. The dashed line marks the maximum training size.</p>
         <canvas id="scalingChart" width="760" height="360"></canvas>
         <div class="legend"><span><i class="dot policy"></i> imitation GNN</span><span><i class="dot exact"></i> handcrafted teacher</span><span><i class="dot sa"></i> simulated annealing</span></div>
       </article>
       <article class="card">
         <h2>Longest held-out chain</h2>
-        <p>The curves show final assignments from the imitation GNN, handcrafted teacher, and simulated annealing on the longest benchmark length.</p>
+        <p>The curves show final assignments from the imitation GNN, teacher, and SA on the longest benchmark size.</p>
         <canvas id="instanceChart" width="760" height="360"></canvas>
         <div class="legend"><span><i class="dot policy"></i> imitation GNN</span><span><i class="dot exact"></i> handcrafted teacher</span><span><i class="dot sa"></i> SA</span></div>
       </article>
     </section>
 
     <section class="card explanation">
-      <h2>Constraint state is now part of the graph</h2>
+      <h2>What was wrong in the previous imitation test?</h2>
+      <div class="grid two text-grid">
+        <div>
+          <h3>Illegal construction choices were not masked</h3>
+          <p>The old imitation policy sampled from all variables even while some variables were still unassigned. Small classification errors could therefore waste the tight <code>3n</code> budget overwriting already-assigned variables before construction was complete.</p>
+          <p>The corrected engine applies the environment's legal action mask: before completion, only unassigned variables are eligible. Once the assignment is complete, all variables become eligible and the network must learn to concentrate probability on violated-constraint endpoints.</p>
+        </div>
+        <div>
+          <h3>The value loss was nearly scale-free</h3>
+          <p>The old loss regressed <code>2i/1000</code> with ordinary MSE. A 10–20 integer-unit error therefore cost almost nothing relative to the variable-selection loss, so the network could minimize training loss while predicting nearly the same small value everywhere.</p>
+          <p>The corrected loss works in integer value units with a robust Huber objective. The mean rule <code>2i</code> is supervised on every variable in every labeled state, not only on whichever variables happened to be teacher candidates.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="card explanation">
+      <h2>Constraint-state graph</h2>
       <div class="grid two text-grid">
         <div>
           <h3>Eight node features</h3>
-          <p>Nodes carry <code>[variable type, constraint type, absolute position, relative position, problem size, assigned, value, constraint status]</code>. Variable nodes use the assignment/value fields; constraint nodes use the final status field.</p>
-          <p>For a constraint node representing <code>xᵢ &lt; xᵢ₊₁</code>, status is <code>+1</code> when violated, <code>-1</code> when satisfied, and <code>0</code> while either endpoint is still unassigned.</p>
+          <p>Nodes use <code>[variable type, constraint type, absolute position, relative position, problem size, assigned, value, constraint status]</code>. For constraint nodes, status is <code>+1</code> when violated, <code>-1</code> when satisfied, and <code>0</code> while unresolved.</p>
         </div>
         <div>
-          <h3>One round is sufficient in principle</h3>
-          <p>A violated constraint node is directly connected to its two endpoint variables. With one typed message-passing round, those variables can receive the violation signal and the variable head can learn to assign probability only to endpoints of violated constraints.</p>
-          <p>The <code>0</code>-round setting is intentionally retained as a control: it cannot receive dynamic constraint status from neighboring constraint nodes.</p>
+          <h3>One message round should suffice</h3>
+          <p>A violated constraint node is directly connected to its two endpoint variables. One typed message round can therefore carry the violation signal to exactly the variables the handcrafted heuristic considers for repair.</p>
+          <p><code>0</code> rounds remains a useful negative control because the variable head then cannot see constraint status.</p>
         </div>
       </div>
     </section>
 
     <section class="card explanation">
-      <h2>What exactly is imitated?</h2>
+      <h2>DAgger-style imitation</h2>
       <div class="grid two text-grid">
         <div>
-          <h3>Variable-selection distribution</h3>
-          <p>During construction, the teacher is uniform over all unassigned variables. During repair, it is uniform over all variables directly adjacent to at least one violated constraint.</p>
-          <p>The loss uses that complete soft target distribution rather than the one random endpoint sampled in a particular trajectory. Choosing any valid teacher endpoint is therefore treated as correct.</p>
+          <h3>Teacher warm-up</h3>
+          <p>Early updates use handcrafted teacher trajectories. Each labeled state carries the complete soft target: uniform over all legal construction choices, or uniform over all endpoints touching at least one violated constraint during repair.</p>
         </div>
         <div>
-          <h3>Value distribution</h3>
-          <p>Conditioned on choosing variable <code>i</code>, the teacher samples from <code>N(2i,1)</code>, rounded and clipped to <code>0…1000</code>. The GNN's existing mean and log-standard-deviation heads are trained to reproduce mean <code>2i</code> and <code>σ=1</code> directly in value space.</p>
-          <p>This removes the old PPO latent-Gaussian mismatch: the supervised target is now exactly the distribution used by the handcrafted algorithm.</p>
+          <h3>Learner-state relabeling</h3>
+          <p>After warm-up, most batches include trajectories generated by the GNN itself. The handcrafted heuristic labels those visited states. This is DAgger-style dataset aggregation and directly addresses behavior-cloning covariate shift.</p>
         </div>
       </div>
     </section>
 
     <section class="card explanation">
-      <h2>Teacher data and inference</h2>
-      <div class="grid two text-grid">
-        <div>
-          <h3>Online teacher trajectories</h3>
-          <p>Training lengths are sampled uniformly from the selected range. Each teacher episode runs the same robust <code>3n</code> local-repair heuristic. A small balanced subset of construction and repair states is used for each supervised update so training remains practical in the browser.</p>
-        </div>
-        <div>
-          <h3>No repair mask at inference</h3>
-          <p>The teacher's candidate set exists only in the imitation loss. When the trained GNN is benchmarked, its variable head samples over <strong>all</strong> variable nodes. It must use assigned-state features and messages from satisfied/violated constraint nodes to recover the teacher policy.</p>
-          <p>This makes the comparison a genuine representational test rather than hard-coding the teacher's endpoint selection into the learned solver.</p>
-        </div>
-      </div>
-    </section>
-
-    <section class="card explanation">
-      <h2>Why this experiment matters</h2>
-      <p>If the blue imitation curve approaches the green teacher curve, then the typed GNN architecture can represent the robust local algorithm and our previous failures were primarily learning/credit-assignment failures. If behavior cloning still fails badly, the remaining problem is architectural or representational, which is a much narrower diagnosis.</p>
+      <h2>Two diagnostics separate representation from closed-loop compounding</h2>
+      <p><strong>Repair candidate mass</strong> measures how much probability the variable head puts on teacher-valid endpoints. <strong>Value mean MAE</strong> measures how closely the value head reproduces <code>2i</code> in integer units. If those become strong while solve rate remains weak, the remaining problem is closed-loop stochastic compounding rather than basic representational capacity.</p>
     </section>
 
     <section class="card explanation">
@@ -129,6 +129,6 @@
 
     <footer>Everything runs locally in your browser. No training data or model state is uploaded.</footer>
   </main>
-  <script type="module" src="app-gnn-ppo-loader.js?v=20260812-27"></script>
+  <script type="module" src="app-gnn-ppo-loader.js?v=20260812-28"></script>
 </body>
 </html>
