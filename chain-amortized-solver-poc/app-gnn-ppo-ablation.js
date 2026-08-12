@@ -92,8 +92,8 @@ async function bootImitation() {
     data[p + 6] = state.assigned[i] ? state.values[i] / DOMAIN_MAX : 0;
   }
 
-  // Constraint status is observable solver state, not a target action label:
-  // +1 = violated, -1 = satisfied, 0 = unresolved because an endpoint is unassigned.
+  // Constraint status is observable solver state, not an action label:
+  // +1 = violated, -1 = satisfied, 0 = unresolved.
   for (let k = 0; k + 1 < state.n; k++) {
     const node = state.n + k;
     const p = node * NODE_FEATURE_DIM;
@@ -128,7 +128,6 @@ function graphEmbeddings(state) {`,
     'normalized message update'
   );
 
-  // Keep the old PPO implementation available for reference, but do not call it.
   source = replaceOnce(source, 'async function trainRL() {', 'async function trainPPOUnused() {', 'disable PPO trainer');
   source = replaceOnce(source, 'async function runBenchmark() {', 'async function runBenchmarkUnused() {', 'disable old benchmark');
   source = replaceOnce(source, 'function drawScaling(rows) {', 'function drawScalingUnused(rows) {', 'disable old scaling plot');
@@ -197,10 +196,7 @@ function teacherTrajectory(n, rng) {
     if (!candidates.length) break;
 
     const bucket = state.assignedCount < n ? construction : repair;
-    bucket.push({
-      state: cloneState(state),
-      candidateIds: Int32Array.from(candidates)
-    });
+    bucket.push({ state: cloneState(state), candidateIds: Int32Array.from(candidates) });
 
     const i = candidates[Math.floor(rng() * candidates.length)];
     applyAction(state, i, teacherSampleValue(i, rng));
@@ -215,13 +211,10 @@ function pickTeacherSamples(trajectory, rng) {
   const take = (arr, count) => {
     if (!arr.length || count <= 0) return;
     const chosen = new Set();
-    while (chosen.size < Math.min(count, arr.length)) {
-      chosen.add(Math.floor(rng() * arr.length));
-    }
+    while (chosen.size < Math.min(count, arr.length)) chosen.add(Math.floor(rng() * arr.length));
     for (const idx of chosen) out.push(arr[idx]);
   };
 
-  // Deliberately reserve half the sample budget for repair states when present.
   take(trajectory.repair, Math.ceil(IMITATION_SAMPLES_PER_EPISODE / 2));
   take(trajectory.construction, IMITATION_SAMPLES_PER_EPISODE - out.length);
   if (out.length < IMITATION_SAMPLES_PER_EPISODE) {
@@ -242,18 +235,15 @@ function imitationSampleLoss(sample) {
   const p = policyTensors(sample.state);
   const ids = tf.tensor1d(sample.candidateIds, 'int32');
 
-  // Teacher variable policy is uniform over all currently valid teacher choices.
-  // Cross-entropy against the soft uniform target does not punish choosing a
-  // different valid random endpoint than the teacher happened to sample.
   const logPolicy = tf.logSoftmax(p.varLogits);
   const variableLoss = tf.gather(logPolicy, ids).mean().neg();
 
-  // Conditional value policy: N(mean=2*i, sigma=1) in integer value space.
   const candidateMu = tf.gather(p.mu, ids);
   const predictedMean = tf.sigmoid(candidateMu);
   const targetMean = ids.toFloat().mul(2 / DOMAIN_MAX);
   const meanLoss = predictedMean.sub(targetMean).square().mean().mul(VALUE_MEAN_COEF);
 
+  // Reinterpret logStd directly in value units for imitation: teacher sigma=1.
   const candidateLogStd = tf.gather(p.logStd, ids);
   const sigmaLoss = candidateLogStd.square().mean().mul(VALUE_SIGMA_COEF);
 
@@ -286,9 +276,8 @@ function imitationAction(state, rng, stochastic = true) {
 
   const meanValue = DOMAIN_MAX * sigmoidScalar(snap.mu[i]);
   const sigmaValue = Math.exp(snap.logStd[i]);
-  const v = Math.max(0, Math.min(DOMAIN_MAX,
-    Math.round(stochastic ? teacherGaussian(meanValue, sigmaValue, rng) : meanValue)
-  ));
+  const sampled = stochastic ? teacherGaussian(meanValue, sigmaValue, rng) : meanValue;
+  const v = Math.max(0, Math.min(DOMAIN_MAX, Math.round(sampled)));
   return { i, v, meanValue, sigmaValue };
 }
 
@@ -369,7 +358,13 @@ async function trainRL() {
 
     if (updates % 4 === 0 || completed >= totalEpisodes) {
       const evalNow = imitationSolveRate(maxN, 7000 + updates, 8);
-      statusEl.textContent = `Teacher episodes ${completed}/${totalEpisodes} · imitation update ${updates} · train n=${startN}…${maxN} · depth ${MESSAGE_ROUNDS} · samples ${samples.length} · solve@${maxN} ${(100 * evalNow.rate).toFixed(0)}%${Number.isFinite(lastLoss) ? ` · loss ${lastLoss.toFixed(4)}` : ''}`;
+      statusEl.textContent = 'Teacher episodes ' + completed + '/' + totalEpisodes +
+        ' · imitation update ' + updates +
+        ' · train n=' + startN + '…' + maxN +
+        ' · depth ' + MESSAGE_ROUNDS +
+        ' · samples ' + samples.length +
+        ' · solve@' + maxN + ' ' + (100 * evalNow.rate).toFixed(0) + '%' +
+        (Number.isFinite(lastLoss) ? ' · loss ' + lastLoss.toFixed(4) : '');
       await tf.nextFrame();
     }
   }
@@ -377,7 +372,7 @@ async function trainRL() {
   trained = true;
   trainBtn.disabled = false;
   benchmarkBtn.disabled = false;
-  statusEl.textContent = `Imitation training complete · constraint-status GNN · depth ${MESSAGE_ROUNDS}. Running teacher / imitation / SA benchmark…`;
+  statusEl.textContent = 'Imitation training complete · constraint-status GNN · depth ' + MESSAGE_ROUNDS + '. Running teacher / imitation / SA benchmark…';
   await runBenchmark();
 }
 
@@ -391,7 +386,7 @@ async function runBenchmark() {
   const trials = 12;
 
   for (const n of benchmarkLengths()) {
-    statusEl.textContent = `Benchmarking imitation GNN, handcrafted teacher, and SA at n=${n}…`;
+    statusEl.textContent = 'Benchmarking imitation GNN, handcrafted teacher, and SA at n=' + n + '…';
     let imitationSolved = 0;
     let teacherSolved = 0;
     let saSolved = 0;
@@ -434,14 +429,14 @@ async function runBenchmark() {
   const sa = runSA(n, 120 * n, mulberry32(9103));
   drawAssignment(imitation.x, teacher.x, sa.x);
 
-  $('policySuccess').textContent = `${Math.round(100 * longest.policySuccess)}%`;
-  $('heuristicSuccess').textContent = `${Math.round(100 * longest.heuristicSuccess)}%`;
-  $('saSuccess').textContent = `${Math.round(100 * longest.saSuccess)}%`;
+  $('policySuccess').textContent = Math.round(100 * longest.policySuccess) + '%';
+  $('heuristicSuccess').textContent = Math.round(100 * longest.heuristicSuccess) + '%';
+  $('saSuccess').textContent = Math.round(100 * longest.saSuccess) + '%';
   $('policyMoves').textContent = Number.isFinite(longest.policyMoves) ? Math.round(longest.policyMoves).toString() : '—';
   $('heuristicMoves').textContent = Number.isFinite(longest.heuristicMoves) ? Math.round(longest.heuristicMoves).toString() : '—';
   $('saEffort').textContent = (120 * n).toLocaleString();
-  $('metricLength').textContent = `n=${n} · imitation/teacher budget ${MOVE_MULTIPLIER}n · train range ${trainedRange.min}…${trainedRange.max} · ${MESSAGE_ROUNDS} message round(s)`;
-  statusEl.textContent = `Done. Blue is the behavior-cloned GNN; green is its handcrafted teacher; orange is SA.`;
+  $('metricLength').textContent = 'n=' + n + ' · imitation/teacher budget ' + MOVE_MULTIPLIER + 'n · train range ' + trainedRange.min + '…' + trainedRange.max + ' · ' + MESSAGE_ROUNDS + ' message round(s)';
+  statusEl.textContent = 'Done. Blue is the behavior-cloned GNN; green is its handcrafted teacher; orange is SA.';
 
   trainBtn.disabled = false;
   benchmarkBtn.disabled = false;
@@ -458,7 +453,7 @@ function drawScaling(rows) {
   ctx.fillStyle = '#7b8495';
   ctx.font = '11px system-ui';
   for (const r of rows) ctx.fillText(String(r.n), X(r.n) - 6, h - pad + 17);
-  for (let k = 0; k <= 4; k++) ctx.fillText(`${25 * k}%`, 5, Y(k / 4) + 4);
+  for (let k = 0; k <= 4; k++) ctx.fillText((25 * k) + '%', 5, Y(k / 4) + 4);
   const bx = X(trainedRange.max);
   ctx.save();
   ctx.setLineDash([5, 5]);
@@ -494,7 +489,7 @@ messageRounds.addEventListener('change', () => {
   }
 });
 
-statusEl.textContent = `TensorFlow.js ready · backend: ${tf.getBackend()}. Imitation GNN: constraint-status nodes + handcrafted teacher.`;
+statusEl.textContent = 'TensorFlow.js ready · backend: ' + tf.getBackend() + '. Imitation GNN: constraint-status nodes + handcrafted teacher.';
 //# sourceURL=app-gnn-imitation-runtime.js
 `;
 
