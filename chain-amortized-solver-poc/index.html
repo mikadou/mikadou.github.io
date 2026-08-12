@@ -60,7 +60,7 @@
     <section class="grid two">
       <article class="card">
         <h2>Closed-loop solve rate</h2>
-        <p>Blue is the full learned policy, green is the handcrafted local-repair teacher, and orange is simulated annealing. The copied log additionally reports <strong>proposalOnly</strong>, <strong>oracleVariable</strong>, <strong>oracleValue</strong>, and <strong>oracleOutcome</strong>. OracleOutcome keeps the learned proposal candidate pool but lets the solver choose the candidate with the true best one-step repair outcome.</p>
+        <p>Blue is the full learned policy, green is the handcrafted local-repair teacher, and orange is simulated annealing. The copied log additionally reports <strong>proposalOnly</strong>, <strong>oracleVariable</strong>, <strong>oracleValue</strong>, and <strong>oracleOutcome</strong>. OracleOutcome keeps the learned proposal candidate pool but lets the solver choose the candidate with the true best one-step repair outcome. To keep the browser benchmark responsive, stress-test sizes <code>n≥80</code> use 2 trials instead of 6; the log records the trial count explicitly.</p>
         <canvas id="scalingChart" width="760" height="360"></canvas>
         <div class="legend"><span><i class="dot policy"></i> DAgger + outcome scorer GNN</span><span><i class="dot exact"></i> handcrafted teacher</span><span><i class="dot sa"></i> simulated annealing</span></div>
       </article>
@@ -106,6 +106,6 @@
 
     <footer>Everything runs locally in your browser. No training data or model state is uploaded.</footer>
   </main>
-  <script type="module" src="app-gnn-ppo-loader.js?v=20260813-35"></script>
+  <script type="module" src="app-gnn-ppo-loader.js?v=20260813-36"></script>
 </body>
 </html>
