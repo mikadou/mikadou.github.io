@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Generic GNN Successor-State Critic</title>
+  <title>Generic GNN Successor Critic + Step Cost</title>
   <link rel="stylesheet" href="styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/tf-backend-wasm.js"></script>
@@ -12,8 +12,8 @@
   <main>
     <header>
       <p class="eyebrow">Proof of concept · generic learned solver actions</p>
-      <h1>Propose an action, temporarily apply it, then value the resulting solver state</h1>
-      <p class="lede">For a selected variable, the learned proposal head generates candidate values. Each candidate is actually applied to a temporary copy of the solver state, the graph is updated, exact immediate improvement is measured, and a shared GNN critic evaluates the resulting successor graph. Actions are ranked by <code>r(s,a,s′) + γV(s′)</code>, so immediate solver feedback is used directly while the critic can represent consequences whose reward arrives later.</p>
+      <h1>Evaluate real successor graphs, while charging for every extra solver step</h1>
+      <p class="lede">For a selected variable, the learned proposal head generates candidate values. Each candidate is actually applied to a temporary copy of the solver state, exact immediate improvement is measured, every action pays a small compute cost, and a shared GNN critic evaluates the resulting successor graph. Actions are ranked by <code>Δobjective − step cost + γV(s′)</code>, so bad actions are recoverable but unnecessary recovery work is no longer free.</p>
     </header>
 
     <section class="card controls">
@@ -39,7 +39,7 @@
         </select>
       </div>
       <div class="buttons">
-        <button id="trainBtn">Train successor-state critic</button>
+        <button id="trainBtn">Train step-cost successor critic</button>
         <button id="benchmarkBtn" class="secondary" disabled>Run comparison</button>
       </div>
       <div id="status" class="status">TensorFlow.js is loading…</div>
@@ -63,7 +63,7 @@
         <p>Blue is the full successor-state policy, green is the handcrafted teacher, and orange is simulated annealing. The copied log also reports <strong>proposalOnly</strong>, <strong>oracleVariable</strong>, <strong>oracleValue</strong>, and <strong>myopicOnly</strong>. MyopicOnly uses the exact immediate reward but removes <code>V(s′)</code>, directly testing whether the critic adds long-horizon information.</p>
         <p>Successor evaluation is more expensive than the previous action scorer, so the browser benchmark uses 6 trials below <code>n=40</code>, 3 trials for <code>40≤n&lt;80</code>, and 1 stress-test trial at <code>n≥80</code>. The log records the count explicitly; the expensive oracle-variable ablation is skipped at <code>n≥80</code>.</p>
         <canvas id="scalingChart" width="760" height="360"></canvas>
-        <div class="legend"><span><i class="dot policy"></i> successor-state critic</span><span><i class="dot exact"></i> handcrafted teacher</span><span><i class="dot sa"></i> simulated annealing</span></div>
+        <div class="legend"><span><i class="dot policy"></i> successor critic + step cost</span><span><i class="dot exact"></i> handcrafted teacher</span><span><i class="dot sa"></i> simulated annealing</span></div>
       </article>
       <article class="card">
         <h2>Longest held-out chain</h2>
@@ -79,13 +79,13 @@
     </section>
 
     <section class="card explanation">
-      <h2>2. Exact immediate reward + learned future value</h2>
-      <p>The action score is <code>r(s,a,s′) + γV(s′)</code>. The immediate term comes directly from the solver adapter, so the critic does not waste capacity predicting effects that can be measured exactly. The value term is trained on discounted return under teacher continuation from both clean and learner-generated states, allowing a successor with little immediate reward to score highly when it leads to better states later.</p>
+      <h2>2. Exact immediate reward + explicit action cost + learned future value</h2>
+      <p>The action score is <code>Δobjective − 0.02 + 0.995·V(s′)</code>, with the usual terminal success bonus. The same <code>−0.02</code> cost is charged on every action in the teacher continuation used to train the critic. A successor that can eventually be repaired is therefore still valuable, but one that needs many extra repairs receives a lower return.</p>
     </section>
 
     <section class="card explanation">
-      <h2>3. A global solver node carries objective-level state</h2>
-      <p>The graph now contains variable nodes, constraint nodes, and one global solver node connected in both directions. For this toy, the global node carries assignment progress, observed violation rate, violation magnitude, and the adapter-reported objective/quality. A real problem can put objective value, incumbent objective, gap, remaining budget, or other solver-level information in the same place.</p>
+      <h2>3. Cost-to-go, not a fixed remaining budget</h2>
+      <p>The global solver node still carries assignment progress, observed violation rate, violation magnitude, and the adapter-reported objective/quality. There is no required remaining-budget feature in this version. Efficiency is represented directly in the return through per-action compute cost, which is closer to an anytime solver that may keep searching while additional work remains worthwhile.</p>
     </section>
 
     <section class="card explanation">
@@ -95,7 +95,7 @@
 
     <section class="card explanation">
       <h2>What this experiment tests</h2>
-      <p>If the full policy beats <strong>myopicOnly</strong>, the critic is learning useful delayed consequences rather than merely reproducing immediate objective changes. If <strong>oracleValue</strong> remains strong but the learned policy fails, the bottleneck is in proposal coverage or successor valuation rather than variable selection. The diagnostic log reports proposal MAE, critic return MAE, and how often <code>r+γV</code> ranks the same candidate highest as a rollout-based return estimate.</p>
+      <p>The previous critic learned that many bad states were eventually recoverable. This version asks a sharper question: can it learn that some recoverable states are still worse because they consume more future solver actions? If the full policy beats <strong>myopicOnly</strong>, the critic is adding useful cost-to-go information rather than merely reproducing immediate objective changes.</p>
     </section>
 
     <section class="card explanation">
@@ -105,6 +105,6 @@
 
     <footer>Everything runs locally in your browser. No training data or model state is uploaded.</footer>
   </main>
-  <script type="module" src="app-gnn-ppo-loader.js?v=20260813-37"></script>
+  <script type="module" src="app-gnn-ppo-loader.js?v=20260813-38"></script>
 </body>
 </html>
