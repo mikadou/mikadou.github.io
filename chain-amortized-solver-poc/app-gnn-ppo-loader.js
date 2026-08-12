@@ -1,4 +1,4 @@
-// Select a TensorFlow.js backend before the generic GNN action model is evaluated.
+// Select a TensorFlow.js backend before the generic proposal + scorer GNN is evaluated.
 // Android Chrome uses CPU directly for reliability: WebGL has shown shader-link
 // failures and WASM lacks kernels needed by this graph/training path.
 // Other platforms prefer WASM, with CPU as the fallback.
@@ -33,8 +33,8 @@ async function boot() {
     }
 
     const platformNote = isAndroid ? ' · Android reliability mode' : '';
-    if (statusEl) statusEl.textContent = `TensorFlow.js ready · backend: ${backend}${platformNote}. Loading generic GNN action model…`;
-    await import('./app-gnn-generic-action.js?v=20260812-33');
+    if (statusEl) statusEl.textContent = `TensorFlow.js ready · backend: ${backend}${platformNote}. Loading proposal + scorer GNN…`;
+    await import('./app-gnn-proposal-scorer.js?v=20260812-34');
   } catch (err) {
     console.error(err);
     if (statusEl) statusEl.textContent = `Error initializing TensorFlow.js backend: ${err.message}`;
