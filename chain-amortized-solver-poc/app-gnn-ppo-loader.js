@@ -34,7 +34,7 @@ async function boot() {
 
     const platformNote = isAndroid ? ' · Android reliability mode' : '';
     if (statusEl) statusEl.textContent = `TensorFlow.js ready · backend: ${backend}${platformNote}. Loading DAgger proposal + outcome scorer…`;
-    await import('./app-gnn-outcome-scorer.js?v=20260813-35');
+    await import('./app-gnn-outcome-scorer.js?v=20260813-36');
   } catch (err) {
     console.error(err);
     if (statusEl) statusEl.textContent = `Error initializing TensorFlow.js backend: ${err.message}`;
