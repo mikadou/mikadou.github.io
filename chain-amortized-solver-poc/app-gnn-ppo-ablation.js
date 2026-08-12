@@ -1,24 +1,28 @@
-// Scale-aware small-GNN PPO ablation + handcrafted heuristic comparison.
-// Loads the reward-shaped PPO engine and changes representation/training only.
-// Environment, joint (i,v) action semantics, 3n PPO budget, and terminal reward
-// remain unchanged. The handcrafted solver is benchmark-only.
+// GNN imitation-learning experiment for the handcrafted local-repair heuristic.
+// The base typed factor-graph implementation is retained, but PPO training is
+// bypassed. Constraint nodes receive dynamic satisfaction state, and supervised
+// distribution matching asks whether the GNN can represent the teacher policy.
 
 function replaceOnce(source, needle, replacement, label) {
-  if (!source.includes(needle)) throw new Error(`PPO ablation patch failed: ${label}`);
+  if (!source.includes(needle)) throw new Error(`GNN imitation patch failed: ${label}`);
   return source.replace(needle, replacement);
 }
 
-async function bootAblation() {
+async function bootImitation() {
   const response = await fetch('./app-gnn-ppo-hybrid.js?v=20260811-22-base', { cache: 'no-store' });
-  if (!response.ok) throw new Error(`Could not load PPO base engine (${response.status}).`);
+  if (!response.ok) throw new Error(`Could not load GNN base engine (${response.status}).`);
   let source = await response.text();
 
-  // Small representation, but now explicitly scale-aware.
-  source = replaceOnce(source, 'const NODE_FEATURE_DIM = 5;', 'const NODE_FEATURE_DIM = 7;', 'scale-aware feature dimension');
-  source = replaceOnce(source, 'const EMBED_DIM = 24;', 'const EMBED_DIM = 8;', 'embedding size');
-  source = replaceOnce(source, 'const MESSAGE_ROUNDS = 6;', 'let MESSAGE_ROUNDS = 0;', 'message depth');
-  source = replaceOnce(source, 'const PPO_BATCH_EPISODES = 4;', 'const PPO_BATCH_EPISODES = 32;', 'PPO batch');
-  source = replaceOnce(source, 'const SELF_IMITATION_COEF = 0.03;', 'const SELF_IMITATION_COEF = 0;', 'self imitation');
+  source = replaceOnce(source, 'const NODE_FEATURE_DIM = 5;', 'const NODE_FEATURE_DIM = 8;', 'feature dimension');
+  source = replaceOnce(source, 'const EMBED_DIM = 24;', 'const EMBED_DIM = 16;', 'embedding size');
+  source = replaceOnce(source, 'const MESSAGE_ROUNDS = 6;', 'let MESSAGE_ROUNDS = 1;', 'message depth');
+  source = replaceOnce(source, 'optimizer = tf.train.adam(0.0008);', 'optimizer = tf.train.adam(0.002);', 'imitation learning rate');
+  source = replaceOnce(
+    source,
+    "const mu = tf.matMul(variableH, params.Wmu).add(params.bmu).reshape([state.n]).clipByValue(-6, 6);",
+    "const mu = tf.matMul(variableH, params.Wmu).add(params.bmu).reshape([state.n]).clipByValue(-12, 6);",
+    'mean range'
+  );
 
   source = replaceOnce(
     source,
@@ -41,9 +45,9 @@ async function bootAblation() {
     baseFeatures[p + 2] = constraintCount <= 1 ? 0 : k / (constraintCount - 1);
   }`;
 
-  const scaleAwareGraphFeatures = `  // Scale-aware static features:
+  const imitationGraphFeatures = `  // Static features:
   // [variable-type, constraint-type, absolute-position, relative-position,
-  //  problem-size, assigned, assigned-value].
+  //  problem-size, assigned, assigned-value, constraint-status].
   const absoluteScale = Math.max(1, MAX_TEST_N - 1);
   const sizeFeature = n / MAX_TEST_N;
 
@@ -65,16 +69,44 @@ async function bootAblation() {
     baseFeatures[p + 4] = sizeFeature;
   }`;
 
-  source = replaceOnce(source, oldGraphFeatures, scaleAwareGraphFeatures, 'scale-aware graph features');
+  source = replaceOnce(source, oldGraphFeatures, imitationGraphFeatures, 'static graph features');
 
-  source = replaceOnce(
-    source,
-    `    data[p + 3] = state.assigned[i] ? 1 : 0;
-    data[p + 4] = state.assigned[i] ? state.values[i] / DOMAIN_MAX : 0;`,
-    `    data[p + 5] = state.assigned[i] ? 1 : 0;
-    data[p + 6] = state.assigned[i] ? state.values[i] / DOMAIN_MAX : 0;`,
-    'dynamic feature indices'
-  );
+  const oldNodeFeatureData = `function nodeFeatureData(state) {
+  const spec = graphSpec(state.n);
+  const data = Float32Array.from(spec.baseFeatures);
+  for (let i = 0; i < state.n; i++) {
+    const p = i * NODE_FEATURE_DIM;
+    data[p + 3] = state.assigned[i] ? 1 : 0;
+    data[p + 4] = state.assigned[i] ? state.values[i] / DOMAIN_MAX : 0;
+  }
+  return data;
+}`;
+
+  const imitationNodeFeatureData = `function nodeFeatureData(state) {
+  const spec = graphSpec(state.n);
+  const data = Float32Array.from(spec.baseFeatures);
+
+  for (let i = 0; i < state.n; i++) {
+    const p = i * NODE_FEATURE_DIM;
+    data[p + 5] = state.assigned[i] ? 1 : 0;
+    data[p + 6] = state.assigned[i] ? state.values[i] / DOMAIN_MAX : 0;
+  }
+
+  // Constraint status is observable solver state, not a target action label:
+  // +1 = violated, -1 = satisfied, 0 = unresolved because an endpoint is unassigned.
+  for (let k = 0; k + 1 < state.n; k++) {
+    const node = state.n + k;
+    const p = node * NODE_FEATURE_DIM;
+    if (state.assigned[k] && state.assigned[k + 1]) {
+      data[p + 7] = state.values[k] < state.values[k + 1] ? -1 : 1;
+    } else {
+      data[p + 7] = 0;
+    }
+  }
+  return data;
+}`;
+
+  source = replaceOnce(source, oldNodeFeatureData, imitationNodeFeatureData, 'dynamic constraint status');
 
   source = replaceOnce(
     source,
@@ -87,73 +119,47 @@ async function bootAblation() {
 }
 
 function graphEmbeddings(state) {`,
-    'row layer norm helper'
+    'row normalization helper'
   );
-
   source = replaceOnce(
     source,
     '    h = tf.relu(h.add(z.add(params.brel)));',
     '    h = tf.relu(rowLayerNorm(h.add(z.add(params.brel))));',
-    'normalized residual message update'
+    'normalized message update'
   );
 
-  source = replaceOnce(
-    source,
-    "async function trainRL() {\n  if (!window.tf) throw new Error('TensorFlow.js did not load.');",
-    "async function trainRL() {\n  if (!window.tf) throw new Error('TensorFlow.js did not load.');\n  MESSAGE_ROUNDS = +messageRounds.value;",
-    'read selected message depth'
-  );
+  // Keep the old PPO implementation available for reference, but do not call it.
+  source = replaceOnce(source, 'async function trainRL() {', 'async function trainPPOUnused() {', 'disable PPO trainer');
+  source = replaceOnce(source, 'async function runBenchmark() {', 'async function runBenchmarkUnused() {', 'disable old benchmark');
+  source = replaceOnce(source, 'function drawScaling(rows) {', 'function drawScalingUnused(rows) {', 'disable old scaling plot');
+  source = replaceOnce(source, 'function drawAssignment(policy, sa) {', 'function drawAssignmentUnused(policy, sa) {', 'disable old assignment plot');
 
-  // Mixed-size training: every episode samples uniformly from the configured
-  // training range, rather than spending most updates on one tiny size.
-  source = replaceOnce(source, '  reachedN = startN;', '  reachedN = maxN;', 'training max marker');
-  source = replaceOnce(source, '  let currentN = startN;', '  let currentN = maxN;', 'disable progressive curriculum');
-  source = replaceOnce(
-    source,
-    '      const n = chooseCurriculumN(currentN, startN, rng);',
-    '      const n = startN + Math.floor(rng() * (maxN - startN + 1));',
-    'uniform mixed-size training'
-  );
+  source += `
 
-  source = replaceOnce(
-    source,
-    '      if (out.solved) rememberSuccess(out.trajectory);',
-    '      // Self-imitation is deliberately disabled in this ablation.',
-    'disable success replay'
-  );
+// ---------------------------------------------------------------------------
+// Handcrafted teacher + imitation learner
+// ---------------------------------------------------------------------------
+const TEACHER_SIGMA = 1.0;
+const IMITATION_BATCH_EPISODES = 16;
+const IMITATION_SAMPLES_PER_EPISODE = 4;
+const VALUE_MEAN_COEF = 12.0;
+const VALUE_SIGMA_COEF = 0.15;
 
-  source = replaceOnce(
-    source,
-    "      statusEl.textContent = `Episode ${completed}/${totalEpisodes} · PPO update ${updates} · curriculum n=${currentN}${currentN < maxN ? `/${maxN}` : ' (max)'} · greedy ${(100 * lastGreedy.rate).toFixed(0)}% · exploratory ${(100 * stochasticRate).toFixed(0)}% · success replay ${successReplay.length}${Number.isFinite(lastLoss) ? ` · loss ${lastLoss.toFixed(4)}` : ''}${promote ? ' · PROMOTED' : ''}`;",
-    "      statusEl.textContent = `Episode ${completed}/${totalEpisodes} · PPO update ${updates} · train n=${startN}…${maxN} uniform · greedy@${maxN} ${(100 * lastGreedy.rate).toFixed(0)}% · exploratory@${maxN} ${(100 * stochasticRate).toFixed(0)}% · depth ${MESSAGE_ROUNDS} · batch ${PPO_BATCH_EPISODES}${Number.isFinite(lastLoss) ? ` · loss ${lastLoss.toFixed(4)}` : ''}`;",
-    'mixed-size training status'
-  );
-
-  source = replaceOnce(
-    source,
-    '  statusEl.textContent = `PPO training complete · curriculum reached n=${reachedN}. Running hybrid-search benchmark…`;',
-    '  statusEl.textContent = `PPO training complete · trained uniformly on n=${startN}…${maxN} · depth ${MESSAGE_ROUNDS}. Running PPO / handcrafted / SA benchmark…`;',
-    'post-training status'
-  );
-
-  // Handcrafted robust local-repair heuristic. The first n moves sample a full
-  // assignment around mean 2*i. Remaining moves resample a random endpoint of
-  // a currently violated adjacent constraint. Total budget matches PPO: 3n.
-  source = replaceOnce(
-    source,
-    'function greedyPolicyProposal(state) {',
-    `const HANDCRAFTED_SIGMA = 1.0;
-
-function handcraftedGaussian(mean, sigma, rng) {
+function teacherGaussian(mean, sigma, rng) {
   const u1 = Math.max(1e-12, rng());
   const u2 = rng();
   const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
   return mean + sigma * z;
 }
 
-function handcraftedValue(i, rng) {
-  const raw = handcraftedGaussian(2 * i, HANDCRAFTED_SIGMA, rng);
-  return Math.max(0, Math.min(DOMAIN_MAX, Math.round(raw)));
+function teacherMeanValue(i) {
+  return Math.max(0, Math.min(DOMAIN_MAX, 2 * i));
+}
+
+function teacherSampleValue(i, rng) {
+  return Math.max(0, Math.min(DOMAIN_MAX,
+    Math.round(teacherGaussian(teacherMeanValue(i), TEACHER_SIGMA, rng))
+  ));
 }
 
 function violatedEndpointIds(x) {
@@ -169,187 +175,329 @@ function violatedEndpointIds(x) {
   return ids;
 }
 
-function runHandcrafted(n, rng) {
-  const x = new Int16Array(n);
+function teacherCandidateIds(state) {
+  if (state.assignedCount < state.n) {
+    const ids = [];
+    for (let i = 0; i < state.n; i++) if (!state.assigned[i]) ids.push(i);
+    return ids;
+  }
+  return violatedEndpointIds(state.values);
+}
+
+function teacherTrajectory(n, rng) {
+  const state = emptyState(n);
+  const construction = [];
+  const repair = [];
   const maxMoves = MOVE_MULTIPLIER * n;
   let moves = 0;
 
-  // Imperfect construction: independently sample every variable around 2*i.
-  for (let i = 0; i < n && moves < maxMoves; i++) {
-    x[i] = handcraftedValue(i, rng);
+  while (moves < maxMoves) {
+    if (state.assignedCount === n && isStrictChain(state.values)) break;
+    const candidates = teacherCandidateIds(state);
+    if (!candidates.length) break;
+
+    const bucket = state.assignedCount < n ? construction : repair;
+    bucket.push({
+      state: cloneState(state),
+      candidateIds: Int32Array.from(candidates)
+    });
+
+    const i = candidates[Math.floor(rng() * candidates.length)];
+    applyAction(state, i, teacherSampleValue(i, rng));
     moves++;
   }
 
-  while (moves < maxMoves && !isStrictChain(x)) {
-    const candidates = violatedEndpointIds(x);
-    if (!candidates.length) break;
-    const i = candidates[Math.floor(rng() * candidates.length)];
-    x[i] = handcraftedValue(i, rng);
+  return { construction, repair, state, moves };
+}
+
+function pickTeacherSamples(trajectory, rng) {
+  const out = [];
+  const take = (arr, count) => {
+    if (!arr.length || count <= 0) return;
+    const chosen = new Set();
+    while (chosen.size < Math.min(count, arr.length)) {
+      chosen.add(Math.floor(rng() * arr.length));
+    }
+    for (const idx of chosen) out.push(arr[idx]);
+  };
+
+  // Deliberately reserve half the sample budget for repair states when present.
+  take(trajectory.repair, Math.ceil(IMITATION_SAMPLES_PER_EPISODE / 2));
+  take(trajectory.construction, IMITATION_SAMPLES_PER_EPISODE - out.length);
+  if (out.length < IMITATION_SAMPLES_PER_EPISODE) {
+    take(trajectory.repair, IMITATION_SAMPLES_PER_EPISODE - out.length);
+  }
+  return out;
+}
+
+function imitationTrainableParams() {
+  return [
+    params.Winit, params.binit, params.Wself, params.brel, ...params.Wrel,
+    params.Wvar, params.bvar, params.Wmu, params.bmu,
+    params.WlogStd, params.blogStd
+  ];
+}
+
+function imitationSampleLoss(sample) {
+  const p = policyTensors(sample.state);
+  const ids = tf.tensor1d(sample.candidateIds, 'int32');
+
+  // Teacher variable policy is uniform over all currently valid teacher choices.
+  // Cross-entropy against the soft uniform target does not punish choosing a
+  // different valid random endpoint than the teacher happened to sample.
+  const logPolicy = tf.logSoftmax(p.varLogits);
+  const variableLoss = tf.gather(logPolicy, ids).mean().neg();
+
+  // Conditional value policy: N(mean=2*i, sigma=1) in integer value space.
+  const candidateMu = tf.gather(p.mu, ids);
+  const predictedMean = tf.sigmoid(candidateMu);
+  const targetMean = ids.toFloat().mul(2 / DOMAIN_MAX);
+  const meanLoss = predictedMean.sub(targetMean).square().mean().mul(VALUE_MEAN_COEF);
+
+  const candidateLogStd = tf.gather(p.logStd, ids);
+  const sigmaLoss = candidateLogStd.square().mean().mul(VALUE_SIGMA_COEF);
+
+  return variableLoss.add(meanLoss).add(sigmaLoss);
+}
+
+async function imitationUpdate(samples) {
+  if (!samples.length) return NaN;
+  const cost = optimizer.minimize(() => tf.tidy(() => {
+    let total = tf.scalar(0);
+    for (const sample of samples) total = total.add(imitationSampleLoss(sample));
+    return total.div(samples.length);
+  }), true, imitationTrainableParams());
+  const value = cost.dataSync()[0];
+  cost.dispose();
+  await tf.nextFrame();
+  return value;
+}
+
+function imitationAction(state, rng, stochastic = true) {
+  const snap = policySnapshot(state);
+  const all = Array.from({ length: state.n }, (_, i) => i);
+  let i;
+  if (stochastic) {
+    i = sampleCategorical(snap.varLogits, all, rng);
+  } else {
+    i = 0;
+    for (let j = 1; j < state.n; j++) if (snap.varLogits[j] > snap.varLogits[i]) i = j;
+  }
+
+  const meanValue = DOMAIN_MAX * sigmoidScalar(snap.mu[i]);
+  const sigmaValue = Math.exp(snap.logStd[i]);
+  const v = Math.max(0, Math.min(DOMAIN_MAX,
+    Math.round(stochastic ? teacherGaussian(meanValue, sigmaValue, rng) : meanValue)
+  ));
+  return { i, v, meanValue, sigmaValue };
+}
+
+function runImitation(n, rng, stochastic = true) {
+  const state = emptyState(n);
+  const maxMoves = MOVE_MULTIPLIER * n;
+  let moves = 0;
+
+  while (moves < maxMoves) {
+    if (state.assignedCount === n && isStrictChain(state.values)) break;
+    const action = imitationAction(state, rng, stochastic);
+    applyAction(state, action.i, action.v);
     moves++;
   }
 
   return {
-    x: Int16Array.from(x),
-    solved: isStrictChain(x),
+    x: Int16Array.from(state.values),
+    solved: state.assignedCount === n && isStrictChain(state.values),
     moves,
-    finalEnergy: violationEnergy(x),
-    maxMoves
+    finalEnergy: state.assignedCount === n ? violationEnergy(state.values) : Infinity
   };
 }
 
-function greedyPolicyProposal(state) {`,
-    'handcrafted local-repair solver'
-  );
+function runHandcrafted(n, rng) {
+  const t = teacherTrajectory(n, rng);
+  return {
+    x: Int16Array.from(t.state.values),
+    solved: t.state.assignedCount === n && isStrictChain(t.state.values),
+    moves: t.moves,
+    finalEnergy: t.state.assignedCount === n ? violationEnergy(t.state.values) : Infinity
+  };
+}
 
-  source = replaceOnce(
-    source,
-    '    statusEl.textContent = `Benchmarking PPO-guided annealed search at n=${n}…`;',
-    '    statusEl.textContent = `Benchmarking PPO, handcrafted repair, and SA at n=${n} · depth ${MESSAGE_ROUNDS}…`;',
-    'benchmark status'
-  );
+function imitationSolveRate(n, seed, trials = 12) {
+  const rng = mulberry32(seed);
+  let solved = 0;
+  let moves = 0;
+  for (let t = 0; t < trials; t++) {
+    const out = runImitation(n, rng, true);
+    if (out.solved) solved++;
+    moves += out.moves;
+  }
+  return { rate: solved / trials, avgMoves: moves / trials };
+}
 
-  source = replaceOnce(
-    source,
-    `    let policySolved = 0;
+async function trainRL() {
+  if (!window.tf) throw new Error('TensorFlow.js did not load.');
+  MESSAGE_ROUNDS = +messageRounds.value;
+  trainBtn.disabled = true;
+  benchmarkBtn.disabled = true;
+
+  const startN = +trainMinN.value;
+  const maxN = +trainMaxN.value;
+  const totalEpisodes = +episodes.value;
+  trainedRange = { min: startN, max: maxN };
+  reachedN = maxN;
+  trained = false;
+  initGNN();
+
+  const rng = mulberry32(20260812);
+  let completed = 0;
+  let updates = 0;
+  let lastLoss = NaN;
+
+  while (completed < totalEpisodes) {
+    const samples = [];
+    const batchEpisodes = Math.min(IMITATION_BATCH_EPISODES, totalEpisodes - completed);
+
+    for (let b = 0; b < batchEpisodes; b++) {
+      const n = startN + Math.floor(rng() * (maxN - startN + 1));
+      const trajectory = teacherTrajectory(n, rng);
+      samples.push(...pickTeacherSamples(trajectory, rng));
+      completed++;
+    }
+
+    lastLoss = await imitationUpdate(samples);
+    updates++;
+
+    if (updates % 4 === 0 || completed >= totalEpisodes) {
+      const evalNow = imitationSolveRate(maxN, 7000 + updates, 8);
+      statusEl.textContent = `Teacher episodes ${completed}/${totalEpisodes} · imitation update ${updates} · train n=${startN}…${maxN} · depth ${MESSAGE_ROUNDS} · samples ${samples.length} · solve@${maxN} ${(100 * evalNow.rate).toFixed(0)}%${Number.isFinite(lastLoss) ? ` · loss ${lastLoss.toFixed(4)}` : ''}`;
+      await tf.nextFrame();
+    }
+  }
+
+  trained = true;
+  trainBtn.disabled = false;
+  benchmarkBtn.disabled = false;
+  statusEl.textContent = `Imitation training complete · constraint-status GNN · depth ${MESSAGE_ROUNDS}. Running teacher / imitation / SA benchmark…`;
+  await runBenchmark();
+}
+
+async function runBenchmark() {
+  if (!trained || !params) return;
+  trainBtn.disabled = true;
+  benchmarkBtn.disabled = true;
+
+  const rows = [];
+  const rng = mulberry32(20260813);
+  const trials = 12;
+
+  for (const n of benchmarkLengths()) {
+    statusEl.textContent = `Benchmarking imitation GNN, handcrafted teacher, and SA at n=${n}…`;
+    let imitationSolved = 0;
+    let teacherSolved = 0;
     let saSolved = 0;
-    const policyMoves = [];`,
-    `    let policySolved = 0;
-    let heuristicSolved = 0;
-    let saSolved = 0;
-    const policyMoves = [];
-    const heuristicMoves = [];`,
-    'benchmark counters'
-  );
+    const imitationMoves = [];
+    const teacherMoves = [];
 
-  source = replaceOnce(
-    source,
-    `      const policy = hybridSolve(n, rng);
-      if (policy.solved) {
-        policySolved++;
-        policyMoves.push(policy.moves);
+    for (let t = 0; t < trials; t++) {
+      const imitation = runImitation(n, rng, true);
+      if (imitation.solved) {
+        imitationSolved++;
+        imitationMoves.push(imitation.moves);
       }
+
+      const teacher = runHandcrafted(n, rng);
+      if (teacher.solved) {
+        teacherSolved++;
+        teacherMoves.push(teacher.moves);
+      }
+
       const sa = runSA(n, 120 * n, rng);
-      if (sa.solved) saSolved++;`,
-    `      const policy = hybridSolve(n, rng);
-      if (policy.solved) {
-        policySolved++;
-        policyMoves.push(policy.moves);
-      }
-      const heuristic = runHandcrafted(n, rng);
-      if (heuristic.solved) {
-        heuristicSolved++;
-        heuristicMoves.push(heuristic.moves);
-      }
-      const sa = runSA(n, 120 * n, rng);
-      if (sa.solved) saSolved++;`,
-    'handcrafted trial benchmark'
-  );
+      if (sa.solved) saSolved++;
+    }
 
-  source = replaceOnce(
-    source,
-    `      policySuccess: policySolved / trials,
+    rows.push({
+      n,
+      policySuccess: imitationSolved / trials,
+      heuristicSuccess: teacherSolved / trials,
       saSuccess: saSolved / trials,
-      policyMoves: median(policyMoves)`,
-    `      policySuccess: policySolved / trials,
-      heuristicSuccess: heuristicSolved / trials,
-      saSuccess: saSolved / trials,
-      policyMoves: median(policyMoves),
-      heuristicMoves: median(heuristicMoves)`,
-    'handcrafted benchmark row'
-  );
+      policyMoves: median(imitationMoves),
+      heuristicMoves: median(teacherMoves)
+    });
+    await tf.nextFrame();
+  }
 
-  source = replaceOnce(
-    source,
-    `  const policy = hybridSolve(n, mulberry32(9001));
-  const sa = runSA(n, 120 * n, mulberry32(9002));
-  drawAssignment(policy.x, sa.x);`,
-    `  const policy = hybridSolve(n, mulberry32(9001));
-  const heuristic = runHandcrafted(n, mulberry32(9003));
-  const sa = runSA(n, 120 * n, mulberry32(9002));
-  drawAssignment(policy.x, heuristic.x, sa.x);`,
-    'longest handcrafted benchmark'
-  );
+  drawScaling(rows);
+  const longest = rows[rows.length - 1];
+  const n = longest.n;
+  const imitation = runImitation(n, mulberry32(9101), true);
+  const teacher = runHandcrafted(n, mulberry32(9102));
+  const sa = runSA(n, 120 * n, mulberry32(9103));
+  drawAssignment(imitation.x, teacher.x, sa.x);
 
-  source = replaceOnce(
-    source,
-    `  $('policySuccess').textContent = \`${'${Math.round(100 * longest.policySuccess)}%'}\`;
-  $('saSuccess').textContent = \`${'${Math.round(100 * longest.saSuccess)}%'}\`;
-  $('policyMoves').textContent = Number.isFinite(longest.policyMoves) ? Math.round(longest.policyMoves).toString() : '—';
-  $('saEffort').textContent = (120 * n).toLocaleString();`,
-    `  $('policySuccess').textContent = \`${'${Math.round(100 * longest.policySuccess)}%'}\`;
-  $('heuristicSuccess').textContent = \`${'${Math.round(100 * longest.heuristicSuccess)}%'}\`;
-  $('saSuccess').textContent = \`${'${Math.round(100 * longest.saSuccess)}%'}\`;
+  $('policySuccess').textContent = `${Math.round(100 * longest.policySuccess)}%`;
+  $('heuristicSuccess').textContent = `${Math.round(100 * longest.heuristicSuccess)}%`;
+  $('saSuccess').textContent = `${Math.round(100 * longest.saSuccess)}%`;
   $('policyMoves').textContent = Number.isFinite(longest.policyMoves) ? Math.round(longest.policyMoves).toString() : '—';
   $('heuristicMoves').textContent = Number.isFinite(longest.heuristicMoves) ? Math.round(longest.heuristicMoves).toString() : '—';
-  $('saEffort').textContent = (120 * n).toLocaleString();`,
-    'handcrafted benchmark metrics'
-  );
+  $('saEffort').textContent = (120 * n).toLocaleString();
+  $('metricLength').textContent = `n=${n} · imitation/teacher budget ${MOVE_MULTIPLIER}n · train range ${trainedRange.min}…${trainedRange.max} · ${MESSAGE_ROUNDS} message round(s)`;
+  statusEl.textContent = `Done. Blue is the behavior-cloned GNN; green is its handcrafted teacher; orange is SA.`;
 
-  source = replaceOnce(
-    source,
-    `  line(ctx, rows.map(r => [X(r.n), Y(r.policySuccess)]), '#5b67d6');
-  line(ctx, rows.map(r => [X(r.n), Y(r.saSuccess)]), '#dd6b55');`,
-    `  line(ctx, rows.map(r => [X(r.n), Y(r.policySuccess)]), '#5b67d6');
+  trainBtn.disabled = false;
+  benchmarkBtn.disabled = false;
+}
+
+function drawScaling(rows) {
+  const { ctx, w, h } = setupCanvas($('scalingChart'));
+  const pad = 44;
+  axes(ctx, w, h, pad, 'chain length n', 'solve rate');
+  const lo = Math.min(...rows.map(r => r.n));
+  const hi = Math.max(...rows.map(r => r.n));
+  const X = n => pad + (n - lo) / Math.max(1, hi - lo) * (w - pad - 20);
+  const Y = p => h - pad - p * (h - pad - 28);
+  ctx.fillStyle = '#7b8495';
+  ctx.font = '11px system-ui';
+  for (const r of rows) ctx.fillText(String(r.n), X(r.n) - 6, h - pad + 17);
+  for (let k = 0; k <= 4; k++) ctx.fillText(`${25 * k}%`, 5, Y(k / 4) + 4);
+  const bx = X(trainedRange.max);
+  ctx.save();
+  ctx.setLineDash([5, 5]);
+  ctx.strokeStyle = '#a9b1c2';
+  ctx.beginPath();
+  ctx.moveTo(bx, 18);
+  ctx.lineTo(bx, h - pad);
+  ctx.stroke();
+  ctx.restore();
+  ctx.fillText('train max', Math.min(w - 80, bx + 5), 28);
+  line(ctx, rows.map(r => [X(r.n), Y(r.policySuccess)]), '#5b67d6');
   line(ctx, rows.map(r => [X(r.n), Y(r.heuristicSuccess)]), '#2e8b72');
-  line(ctx, rows.map(r => [X(r.n), Y(r.saSuccess)]), '#dd6b55');`,
-    'handcrafted solve-rate line'
-  );
+  line(ctx, rows.map(r => [X(r.n), Y(r.saSuccess)]), '#dd6b55');
+}
 
-  source = replaceOnce(source, 'function drawAssignment(policy, sa) {', 'function drawAssignment(policy, heuristic, sa) {', 'handcrafted assignment signature');
-  source = replaceOnce(
-    source,
-    `  line(ctx, Array.from(policy, (v, i) => [X(i), Y(v)]), '#5b67d6', 2.2);
-  line(ctx, Array.from(sa, (v, i) => [X(i), Y(v)]), '#dd6b55', 1.8);`,
-    `  line(ctx, Array.from(policy, (v, i) => [X(i), Y(v)]), '#5b67d6', 2.2);
-  line(ctx, Array.from(heuristic, (v, i) => [X(i), Y(v)]), '#2e8b72', 2.0);
-  line(ctx, Array.from(sa, (v, i) => [X(i), Y(v)]), '#dd6b55', 1.8);`,
-    'handcrafted assignment line'
-  );
-
-  // Keep the ablation benchmark on the direct 3n PPO policy, not hybrid search.
-  source = replaceOnce(source, '      const policy = hybridSolve(n, rng);', '      const policy = rollout(n, rng, false);', 'direct benchmark rollout');
-  source = replaceOnce(source, '  const policy = hybridSolve(n, mulberry32(9001));', '  const policy = rollout(n, mulberry32(9001), false);', 'direct longest rollout');
-
-  source = replaceOnce(
-    source,
-    "  $('metricLength').textContent = `n=${n} · domain 0…${DOMAIN_MAX} · training ${MOVE_MULTIPLIER}n · hybrid inference ${INFERENCE_MOVE_MULTIPLIER}n · curriculum reached n=${reachedN}`;",
-    "  $('metricLength').textContent = `n=${n} · PPO ${MOVE_MULTIPLIER}n · handcrafted ${MOVE_MULTIPLIER}n (mean 2i, σ=${HANDCRAFTED_SIGMA}) · SA 120n · train range ${trainedRange.min}…${trainedRange.max}`;",
-    'benchmark headline'
-  );
-
-  source = replaceOnce(
-    source,
-    '  statusEl.textContent = `Done. Training stays at ${MOVE_MULTIPLIER}n moves; inference gets up to ${INFERENCE_MOVE_MULTIPLIER}n moves with PPO proposals, ε exploration, annealed acceptance, and a protected incumbent.`;',
-    '  statusEl.textContent = `Done. Comparing direct PPO with handcrafted violated-constraint repair (mean 2i, σ=${HANDCRAFTED_SIGMA}) and SA.`;',
-    'final benchmark status'
-  );
-
-  source = replaceOnce(
-    source,
-    "  ctx.fillText('curriculum reached', Math.min(w - 115, bx + 5), 28);",
-    "  ctx.fillText('train max', Math.min(w - 80, bx + 5), 28);",
-    'training-range chart marker'
-  );
-
-  source = replaceOnce(
-    source,
-    '    statusEl.textContent = `TensorFlow.js ready · backend: ${tf.getBackend()}. Train the PPO actor-critic GNN curriculum; benchmark uses ${INFERENCE_MOVE_MULTIPLIER}n hybrid search.`;',
-    '    statusEl.textContent = `TensorFlow.js ready · backend: ${tf.getBackend()}. Scale-aware PPO + handcrafted local-repair comparison ready.`;',
-    'ready status'
-  );
-
-  source += `
+function drawAssignment(imitation, teacher, sa) {
+  const { ctx, w, h } = setupCanvas($('instanceChart'));
+  const pad = 44;
+  axes(ctx, w, h, pad, 'variable node id i', 'assigned value');
+  const n = imitation.length;
+  const X = i => pad + i / Math.max(1, n - 1) * (w - pad - 20);
+  const Y = v => h - pad - Math.max(0, v) / DOMAIN_MAX * (h - pad - 28);
+  line(ctx, Array.from(imitation, (v, i) => [X(i), Y(v)]), '#5b67d6', 2.2);
+  line(ctx, Array.from(teacher, (v, i) => [X(i), Y(v)]), '#2e8b72', 2.0);
+  line(ctx, Array.from(sa, (v, i) => [X(i), Y(v)]), '#dd6b55', 1.8);
+}
 
 messageRounds.addEventListener('change', () => {
   if (trained) {
     trained = false;
     benchmarkBtn.disabled = true;
-    statusEl.textContent = 'Message-passing depth changed. Retrain before benchmarking so train and evaluation depths match.';
+    statusEl.textContent = 'Message-passing depth changed. Retrain before benchmarking.';
   }
 });
+
+statusEl.textContent = `TensorFlow.js ready · backend: ${tf.getBackend()}. Imitation GNN: constraint-status nodes + handcrafted teacher.`;
+//# sourceURL=app-gnn-imitation-runtime.js
 `;
 
-  source += '\n//# sourceURL=app-gnn-ppo-handcrafted-comparison-runtime.js\n';
   const blobUrl = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
   try {
     await import(blobUrl);
@@ -358,8 +506,8 @@ messageRounds.addEventListener('change', () => {
   }
 }
 
-bootAblation().catch(err => {
+bootImitation().catch(err => {
   console.error(err);
   const statusEl = document.getElementById('status');
-  if (statusEl) statusEl.textContent = `Error loading PPO / handcrafted comparison: ${err.message}`;
+  if (statusEl) statusEl.textContent = `Error loading GNN imitation experiment: ${err.message}`;
 });
