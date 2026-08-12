@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Generic GNN DAgger Proposal + Outcome Scorer</title>
+  <title>Generic GNN Successor-State Critic</title>
   <link rel="stylesheet" href="styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/tf-backend-wasm.js"></script>
@@ -11,9 +11,9 @@
 <body>
   <main>
     <header>
-      <p class="eyebrow">Proof of concept · generic learned repair actions</p>
-      <h1>Learn where to repair, propose values on learner states, then score them by solver outcome</h1>
-      <p class="lede">The variable-selection GNN stays generic. For the selected variable, a Gaussian proposal head generates candidate values, but it is now trained with DAgger-style learner-visited states so it sees the states its own mistakes create. The final scorer <code>Q(s,i,v)</code> is no longer taught that one stochastic teacher draw is uniquely correct: it learns to rank candidates from their measured one-step improvement in the solver state.</p>
+      <p class="eyebrow">Proof of concept · generic learned solver actions</p>
+      <h1>Propose an action, temporarily apply it, then value the resulting solver state</h1>
+      <p class="lede">For a selected variable, the learned proposal head generates candidate values. Each candidate is actually applied to a temporary copy of the solver state, the graph is updated, exact immediate improvement is measured, and a shared GNN critic evaluates the resulting successor graph. Actions are ranked by <code>r(s,a,s′) + γV(s′)</code>, so immediate solver feedback is used directly while the critic can represent consequences whose reward arrives later.</p>
     </header>
 
     <section class="card controls">
@@ -32,14 +32,14 @@
       <div>
         <label for="messageRounds">Message-passing rounds</label>
         <select id="messageRounds">
-          <option value="0">0 — no constraint context</option>
-          <option value="1" selected>1 — local repair context</option>
-          <option value="2">2 — wider local context</option>
+          <option value="0">0 — no constraint propagation</option>
+          <option value="1" selected>1 — local + global state</option>
+          <option value="2">2 — wider context</option>
           <option value="6">6 — deep propagation</option>
         </select>
       </div>
       <div class="buttons">
-        <button id="trainBtn">Train DAgger + outcome GNN</button>
+        <button id="trainBtn">Train successor-state critic</button>
         <button id="benchmarkBtn" class="secondary" disabled>Run comparison</button>
       </div>
       <div id="status" class="status">TensorFlow.js is loading…</div>
@@ -50,7 +50,7 @@
       <article class="metric"><span>Teacher solve rate</span><strong id="heuristicSuccess">—</strong><small>at longest test length</small></article>
       <article class="metric"><span>SA solve rate</span><strong id="saSuccess">—</strong><small>at longest test length</small></article>
       <article class="metric"><span>Variable-head F1</span><strong id="candidateMass">—</strong><small>repair-node classification</small></article>
-      <article class="metric"><span>Q outcome regret</span><strong id="meanMae">—</strong><small>best true candidate reward minus Q's pick</small></article>
+      <article class="metric"><span>Critic return MAE</span><strong id="meanMae">—</strong><small>predicted vs rollout return</small></article>
       <article class="metric"><span>GNN choices</span><strong id="policyMoves">—</strong><small>median moves when solved</small></article>
       <article class="metric"><span>Teacher choices</span><strong id="heuristicMoves">—</strong><small>median moves when solved</small></article>
       <article class="metric"><span>SA effort</span><strong id="saEffort">—</strong><small>proposals / trial</small></article>
@@ -60,9 +60,10 @@
     <section class="grid two">
       <article class="card">
         <h2>Closed-loop solve rate</h2>
-        <p>Blue is the full learned policy, green is the handcrafted local-repair teacher, and orange is simulated annealing. The copied log additionally reports <strong>proposalOnly</strong>, <strong>oracleVariable</strong>, <strong>oracleValue</strong>, and <strong>oracleOutcome</strong>. OracleOutcome keeps the learned proposal candidate pool but lets the solver choose the candidate with the true best one-step repair outcome. To keep the browser benchmark responsive, stress-test sizes <code>n≥80</code> use 2 trials instead of 6; the log records the trial count explicitly.</p>
+        <p>Blue is the full successor-state policy, green is the handcrafted teacher, and orange is simulated annealing. The copied log also reports <strong>proposalOnly</strong>, <strong>oracleVariable</strong>, <strong>oracleValue</strong>, and <strong>myopicOnly</strong>. MyopicOnly uses the exact immediate reward but removes <code>V(s′)</code>, directly testing whether the critic adds long-horizon information.</p>
+        <p>Successor evaluation is more expensive than the previous action scorer, so the browser benchmark uses 6 trials below <code>n=40</code>, 3 trials for <code>40≤n&lt;80</code>, and 1 stress-test trial at <code>n≥80</code>. The log records the count explicitly; the expensive oracle-variable ablation is skipped at <code>n≥80</code>.</p>
         <canvas id="scalingChart" width="760" height="360"></canvas>
-        <div class="legend"><span><i class="dot policy"></i> DAgger + outcome scorer GNN</span><span><i class="dot exact"></i> handcrafted teacher</span><span><i class="dot sa"></i> simulated annealing</span></div>
+        <div class="legend"><span><i class="dot policy"></i> successor-state critic</span><span><i class="dot exact"></i> handcrafted teacher</span><span><i class="dot sa"></i> simulated annealing</span></div>
       </article>
       <article class="card">
         <h2>Longest held-out chain</h2>
@@ -73,30 +74,28 @@
     </section>
 
     <section class="card explanation">
-      <h2>1. Variable selection remains the generic graph problem</h2>
-      <p>The typed GNN embeds variable and constraint nodes and the shared variable head chooses which variable should be repaired. Constraint status is solver state, not a hard-coded chain heuristic. The previous experiment already showed that this branch can learn the violated-endpoint repair decision.</p>
+      <h2>1. The solver transition is executed, not imagined</h2>
+      <p>For candidate <code>(i,v)</code>, the engine clones the current state, applies <code>xᵢ=v</code>, and rebuilds the graph from that successor. In a real CP/MIP adapter, this is the extension point where propagation, domain changes, soft-constraint updates, and objective recomputation would occur. The neural network therefore evaluates the consequences that the solver actually produced.</p>
     </section>
 
     <section class="card explanation">
-      <h2>2. Proposal learning now uses learner-visited states</h2>
-      <p>The proposal head still predicts <code>(μ,σ)</code> and learns from demonstrated teacher values. Early training uses clean synthetic states. After a warm-up, an increasing fraction of examples comes from rollouts produced by the current learned proposal/scorer system. This is DAgger-style state aggregation: the value model is explicitly trained on the distribution of states it creates at inference time.</p>
-      <p>The copied log reports proposal MAE separately on synthetic states and on learner-rollout states, so covariate shift is visible directly.</p>
+      <h2>2. Exact immediate reward + learned future value</h2>
+      <p>The action score is <code>r(s,a,s′) + γV(s′)</code>. The immediate term comes directly from the solver adapter, so the critic does not waste capacity predicting effects that can be measured exactly. The value term is trained on discounted return under teacher continuation from both clean and learner-generated states, allowing a successor with little immediate reward to score highly when it leads to better states later.</p>
     </section>
 
     <section class="card explanation">
-      <h2>3. Q(s,i,v) learns what works, not which sample the teacher happened to draw</h2>
-      <p>For a full repair state and selected variable, training generates a pool of candidate values. Each candidate is temporarily applied to the solver state and gets a one-step reward from the change in violated constraints plus a smaller tie-breaking signal from violation magnitude. Those measured rewards are converted into a soft ranking target for the scorer.</p>
-      <p>This means several different values can all be considered good. The scorer is no longer forced to call <code>14</code> correct and <code>15</code> wrong merely because one stochastic demonstration happened to sample 14.</p>
+      <h2>3. A global solver node carries objective-level state</h2>
+      <p>The graph now contains variable nodes, constraint nodes, and one global solver node connected in both directions. For this toy, the global node carries assignment progress, observed violation rate, violation magnitude, and the adapter-reported objective/quality. A real problem can put objective value, incumbent objective, gap, remaining budget, or other solver-level information in the same place.</p>
     </section>
 
     <section class="card explanation">
-      <h2>Proposal + scorer separation</h2>
-      <p>The proposal answers <em>where should we look?</em> Candidate generation mixes Gaussian samples with generic exploration values such as bounds, current-value perturbations, and random domain samples. The scorer answers <em>which candidate actually improves this solver state?</em> The scorer can therefore become non-Gaussian, multimodal, or highly state-dependent without changing the proposal interface.</p>
+      <h2>4. Proposal learning remains separate</h2>
+      <p>The Gaussian <code>(μ,σ)</code> head is still only a proposal mechanism trained from demonstrations, with DAgger-style learner-state coverage. It is not the final decision rule. The final value choice is made after candidate execution by successor-state evaluation, so the architecture is free to prefer multimodal or highly state-dependent values.</p>
     </section>
 
     <section class="card explanation">
-      <h2>Why oracleOutcome matters</h2>
-      <p>If <code>oracleOutcome</code> succeeds while the full model fails, the proposal pool already contains useful values and Q is ranking them badly. If oracleOutcome also fails, the proposal/candidate generator is not placing good values into the pool. Together with <code>oracleValue</code> and <code>oracleVariable</code>, this should isolate the next bottleneck in one run.</p>
+      <h2>What this experiment tests</h2>
+      <p>If the full policy beats <strong>myopicOnly</strong>, the critic is learning useful delayed consequences rather than merely reproducing immediate objective changes. If <strong>oracleValue</strong> remains strong but the learned policy fails, the bottleneck is in proposal coverage or successor valuation rather than variable selection. The diagnostic log reports proposal MAE, critic return MAE, and how often <code>r+γV</code> ranks the same candidate highest as a rollout-based return estimate.</p>
     </section>
 
     <section class="card explanation">
@@ -106,6 +105,6 @@
 
     <footer>Everything runs locally in your browser. No training data or model state is uploaded.</footer>
   </main>
-  <script type="module" src="app-gnn-ppo-loader.js?v=20260813-36"></script>
+  <script type="module" src="app-gnn-ppo-loader.js?v=20260813-37"></script>
 </body>
 </html>
