@@ -1,4 +1,4 @@
-// Select a TensorFlow.js backend before the successor-state critic GNN is evaluated.
+// Select a TensorFlow.js backend before the step-cost successor-state critic is evaluated.
 // Android Chrome uses CPU directly for reliability; other platforms prefer WASM.
 async function boot() {
   const statusEl = document.getElementById('status');
@@ -31,8 +31,8 @@ async function boot() {
     }
 
     const platformNote = isAndroid ? ' · Android reliability mode' : '';
-    if (statusEl) statusEl.textContent = `TensorFlow.js ready · backend: ${backend}${platformNote}. Loading successor-state critic…`;
-    await import('./app-gnn-successor-critic.js?v=20260813-37');
+    if (statusEl) statusEl.textContent = `TensorFlow.js ready · backend: ${backend}${platformNote}. Loading step-cost successor critic…`;
+    await import('./app-gnn-successor-cost.js?v=20260813-38');
   } catch (err) {
     console.error(err);
     if (statusEl) statusEl.textContent = `Error initializing TensorFlow.js backend: ${err.message}`;
