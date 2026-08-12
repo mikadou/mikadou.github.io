@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Generic GNN Repair Action Model</title>
+  <title>Generic GNN Proposal + Value Scorer</title>
   <link rel="stylesheet" href="styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/tf-backend-wasm.js"></script>
@@ -12,8 +12,8 @@
   <main>
     <header>
       <p class="eyebrow">Proof of concept · generic learned repair actions</p>
-      <h1>Learn which variable to repair and which value to try — without encoding the heuristic formula</h1>
-      <p class="lede">This version removes the problem-specific linear value head. The common solver abstraction is now explicit: a typed GNN encodes the current variable/constraint graph, one shared head scores variable nodes, and a second shared head scores candidate values conditioned on the selected variable and graph state. The handcrafted <code>N(2i,1)</code> heuristic is used only to generate imitation examples; its formula is not present in the learned forward pass.</p>
+      <h1>Learn which variable to repair, propose values, then score the proposals</h1>
+      <p class="lede">The learned action model now combines both approaches. A typed GNN encodes the variable/constraint graph. One head scores variable nodes. For the selected variable, a generic proposal head predicts a Gaussian <code>(μ,σ)</code> only to generate promising candidate values. A separate shared scorer <code>Q(s,i,v)</code> then ranks those candidates and makes the final value decision. The Gaussian is therefore a proposal mechanism, not an assumption that the true value policy must be Gaussian.</p>
     </header>
 
     <section class="card controls">
@@ -39,18 +39,18 @@
         </select>
       </div>
       <div class="buttons">
-        <button id="trainBtn">Train generic action GNN</button>
+        <button id="trainBtn">Train proposal + scorer GNN</button>
         <button id="benchmarkBtn" class="secondary" disabled>Run comparison</button>
       </div>
       <div id="status" class="status">TensorFlow.js is loading…</div>
     </section>
 
     <section class="metrics">
-      <article class="metric"><span>Generic GNN solve rate</span><strong id="policySuccess">—</strong><small>at longest test length</small></article>
+      <article class="metric"><span>Proposal+scorer solve rate</span><strong id="policySuccess">—</strong><small>at longest test length</small></article>
       <article class="metric"><span>Teacher solve rate</span><strong id="heuristicSuccess">—</strong><small>at longest test length</small></article>
       <article class="metric"><span>SA solve rate</span><strong id="saSuccess">—</strong><small>at longest test length</small></article>
       <article class="metric"><span>Variable-head F1</span><strong id="candidateMass">—</strong><small>repair-node classification</small></article>
-      <article class="metric"><span>Value argmax MAE</span><strong id="meanMae">—</strong><small>integer units at training max</small></article>
+      <article class="metric"><span>Scorer argmax MAE</span><strong id="meanMae">—</strong><small>within generated candidate set</small></article>
       <article class="metric"><span>GNN choices</span><strong id="policyMoves">—</strong><small>median moves when solved</small></article>
       <article class="metric"><span>Teacher choices</span><strong id="heuristicMoves">—</strong><small>median moves when solved</small></article>
       <article class="metric"><span>SA effort</span><strong id="saEffort">—</strong><small>proposals / trial</small></article>
@@ -60,48 +60,48 @@
     <section class="grid two">
       <article class="card">
         <h2>Closed-loop solve rate</h2>
-        <p>Blue is the generic learned action policy, green is the handcrafted local-repair teacher, and orange is simulated annealing. The copied log also reports <strong>oracleVariable</strong> and <strong>oracleValue</strong> controls so variable selection and value selection can be diagnosed independently.</p>
+        <p>Blue is the full learned policy, green is the handcrafted local-repair teacher, and orange is simulated annealing. The copied log also reports <strong>proposalOnly</strong>, <strong>oracleVariable</strong>, and <strong>oracleValue</strong> controls.</p>
         <canvas id="scalingChart" width="760" height="360"></canvas>
-        <div class="legend"><span><i class="dot policy"></i> generic GNN</span><span><i class="dot exact"></i> handcrafted teacher</span><span><i class="dot sa"></i> simulated annealing</span></div>
+        <div class="legend"><span><i class="dot policy"></i> proposal + scorer GNN</span><span><i class="dot exact"></i> handcrafted teacher</span><span><i class="dot sa"></i> simulated annealing</span></div>
       </article>
       <article class="card">
         <h2>Longest held-out chain</h2>
-        <p>The curves show final assignments from the generic GNN, teacher, and SA on the longest benchmark size.</p>
+        <p>The curves show final assignments from the learned policy, teacher, and SA on the longest benchmark size.</p>
         <canvas id="instanceChart" width="760" height="360"></canvas>
-        <div class="legend"><span><i class="dot policy"></i> generic GNN</span><span><i class="dot exact"></i> handcrafted teacher</span><span><i class="dot sa"></i> SA</span></div>
+        <div class="legend"><span><i class="dot policy"></i> proposal + scorer GNN</span><span><i class="dot exact"></i> handcrafted teacher</span><span><i class="dot sa"></i> SA</span></div>
       </article>
     </section>
 
     <section class="card explanation">
-      <h2>Common architecture across optimization problems</h2>
+      <h2>Generic learned action structure</h2>
       <div class="grid two text-grid">
         <div>
-          <h3>1. Graph state encoder</h3>
-          <p>Variable and constraint nodes are embedded by a typed message-passing GNN. Constraint nodes expose generic solver-state information such as satisfied/violated status. Variable nodes expose assignment state, current value, domain-normalized features, and any model-supplied variable metadata.</p>
-          <p>The chain coordinate is present here only because the current teacher genuinely depends on that problem data. The network is not told that the relationship should be linear.</p>
+          <h3>1. Pick a variable</h3>
+          <p>The graph encoder produces contextual embeddings for all variable and constraint nodes. A shared variable head scores which variable should be repaired next. Its architecture does not know anything about monotone chains; the current graph/features merely provide the problem state.</p>
         </div>
         <div>
-          <h3>2. Variable action head</h3>
-          <p>A shared scalar head scores every variable embedding. In this imitation experiment it is trained to rank variables touching violated constraints. In a later RL solver the same scores can be trained from search reward rather than teacher labels.</p>
+          <h3>2. Propose values</h3>
+          <p>Conditioned on the selected variable embedding and global graph context, a shared head predicts <code>μ</code> and <code>σ</code>. Samples from that distribution are mixed with generic exploration candidates: domain bounds, the current value and nearby perturbations when assigned, and random domain samples.</p>
         </div>
       </div>
     </section>
 
     <section class="card explanation">
-      <h2>Generic value selection: score <em>(state, variable, candidate value)</em></h2>
-      <p>The value branch no longer outputs a slope, mean formula, or special distribution tied to node index. For a selected variable <code>i</code>, it evaluates candidate values using a shared MLP:</p>
-      <p><code>score(s,i,v) = MLP(local embedding before messages, contextual variable embedding, pooled graph embedding, candidate-value features)</code>.</p>
-      <p>Candidate features are generic numeric-domain quantities: normalized candidate value, change from the current value, and whether it leaves the value unchanged. During this toy benchmark the finite integer domain <code>0…1000</code> can be enumerated. In a larger solver the same interface can score a smaller candidate set produced by propagation, random sampling, neighborhood generators, or continuous proposal models.</p>
+      <h2>3. Score each candidate value</h2>
+      <p>The final decision is not made by the Gaussian. Every proposed candidate is scored by a separate shared network:</p>
+      <p><code>Q(s,i,v) = MLP(local embedding before messages, contextual variable embedding, pooled graph embedding, candidate-value features)</code>.</p>
+      <p>This lets the final policy represent multimodal or irregular preferences even when the proposal distribution itself is simple. If a future solver has better candidate generators — propagation, domain-specific neighborhoods, historical values, or another neural proposal model — they can be added to the same pool without changing the scorer.</p>
     </section>
 
     <section class="card explanation">
-      <h2>Imitation labels are not architectural assumptions</h2>
-      <p>The handcrafted teacher is still used to generate demonstrations so we can test representation without RL credit assignment. For each repair state, training provides good variable nodes and one demonstrated value. The value scorer sees that demonstrated value mixed with nearby and random negative candidates and learns to rank it. The network never receives the formula <code>2i</code> as a model parameter or forward-pass rule.</p>
+      <h2>Training remains generic imitation</h2>
+      <p>The handcrafted heuristic is used only to generate demonstrated <code>(state, variable, value)</code> actions. The proposal head learns by likelihood of demonstrated values. The scorer learns to rank the demonstrated value against nearby and random negatives. The network is never given the teacher's <code>2i</code> formula as part of its forward pass.</p>
+      <p>Value training deliberately mixes full repair states and partial construction states so the learned value mechanism is not tied to one solver phase.</p>
     </section>
 
     <section class="card explanation">
-      <h2>Where this points next</h2>
-      <p>The intended general solver action remains <code>(variable node, value proposal)</code>. Imitation can initialize both heads from a classical heuristic or customer simulator; then RL can optimize the same action model against actual search improvement. The problem-specific code should increasingly live in the graph/features, domain interface, and simulator — not in the neural architecture.</p>
+      <h2>Why keep both mechanisms?</h2>
+      <p><strong>ProposalOnly</strong> measures how good the learned <code>(μ,σ)</code> generator is by itself. The full policy uses the same proposal but lets <code>Q(s,i,v)</code> rerank the pool. If the full model beats proposalOnly, the scorer is adding useful non-Gaussian decision capacity. The log also keeps oracle-variable and oracle-value controls to isolate failures.</p>
     </section>
 
     <section class="card explanation">
@@ -111,6 +111,6 @@
 
     <footer>Everything runs locally in your browser. No training data or model state is uploaded.</footer>
   </main>
-  <script type="module" src="app-gnn-ppo-loader.js?v=20260812-33"></script>
+  <script type="module" src="app-gnn-ppo-loader.js?v=20260812-34"></script>
 </body>
 </html>
