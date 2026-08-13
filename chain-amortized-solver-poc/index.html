@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Generic GNN Successor Steps-to-Go Ranker</title>
+  <title>Simple GNN Imitation Solver</title>
   <link rel="stylesheet" href="styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/tf-backend-wasm.js"></script>
@@ -11,9 +11,9 @@
 <body>
   <main>
     <header>
-      <p class="eyebrow">Proof of concept · generic learned solver actions</p>
-      <h1>Learn to rank real successor graphs by remaining solver steps</h1>
-      <p class="lede">The successful oracle showed that the existing candidate pool and action abstraction are sufficient. This version directly imitates that oracle: first train variable selection and value proposal, freeze them, then train a separate GNN ranker on whole successor candidate sets labeled by teacher-measured steps-to-go.</p>
+      <p class="eyebrow">Proof of concept · learned solver actions</p>
+      <h1>Can a neural policy simply imitate the handcrafted repair heuristic?</h1>
+      <p class="lede">This version deliberately removes the critic, successor ranking, rollout oracle, and RL machinery. A message-passing GNN learns which variable node to repair. A small generic MLP learns the numeric value to assign from the selected variable's ordinary node features. Both are trained only from teacher demonstrations.</p>
     </header>
 
     <section class="card controls">
@@ -33,13 +33,13 @@
         <label for="messageRounds">Message-passing rounds</label>
         <select id="messageRounds">
           <option value="0">0 — no constraint propagation</option>
-          <option value="1" selected>1 — local + global state</option>
+          <option value="1" selected>1 — local constraint context</option>
           <option value="2">2 — wider context</option>
           <option value="6">6 — deep propagation</option>
         </select>
       </div>
       <div class="buttons">
-        <button id="trainBtn">Train steps-to-go ranker</button>
+        <button id="trainBtn">Train imitation policy</button>
         <button id="benchmarkBtn" class="secondary" disabled>Run comparison</button>
       </div>
       <div id="status" class="status">TensorFlow.js is loading…</div>
@@ -49,10 +49,10 @@
       <article class="metric"><span>Learned solve rate</span><strong id="policySuccess">—</strong><small>at longest test length</small></article>
       <article class="metric"><span>Teacher solve rate</span><strong id="heuristicSuccess">—</strong><small>at longest test length</small></article>
       <article class="metric"><span>SA solve rate</span><strong id="saSuccess">—</strong><small>at longest test length</small></article>
-      <article class="metric"><span>Variable-head F1</span><strong id="candidateMass">—</strong><small>repair-node classification</small></article>
-      <article class="metric"><span>Steps-to-go MAE</span><strong id="meanMae">—</strong><small>predicted vs teacher continuation steps</small></article>
-      <article class="metric"><span>GNN choices</span><strong id="policyMoves">—</strong><small>median moves when solved</small></article>
-      <article class="metric"><span>Teacher choices</span><strong id="heuristicMoves">—</strong><small>median moves when solved</small></article>
+      <article class="metric"><span>Variable-head F1</span><strong id="candidateMass">—</strong><small>violated-endpoint classification</small></article>
+      <article class="metric"><span>Value MAE</span><strong id="meanMae">—</strong><small>MLP mean vs teacher mean</small></article>
+      <article class="metric"><span>Imitation moves</span><strong id="policyMoves">—</strong><small>median moves when solved</small></article>
+      <article class="metric"><span>Teacher moves</span><strong id="heuristicMoves">—</strong><small>median moves when solved</small></article>
       <article class="metric"><span>SA effort</span><strong id="saEffort">—</strong><small>proposals / trial</small></article>
     </section>
     <p class="status">Headline benchmark: <strong id="metricLength">—</strong></p>
@@ -60,41 +60,41 @@
     <section class="grid two">
       <article class="card">
         <h2>Closed-loop solve rate</h2>
-        <p>The learned policy now chooses candidate values by <strong>minimum predicted remaining solver steps</strong>. The log still reports <strong>proposalOnly</strong>, <strong>oracleVariable</strong>, <strong>oracleValue</strong>, <strong>myopicOnly</strong>, and a small <strong>ORACLE_STEPS</strong> upper-bound check.</p>
+        <p>Blue is the learned imitation policy, green is the handcrafted heuristic, and orange is simulated annealing. The diagnostic log also reports <strong>oracleEndpoints</strong> and <strong>oracleValue</strong> so the two imitation subproblems stay easy to separate.</p>
         <canvas id="scalingChart" width="760" height="360"></canvas>
-        <div class="legend"><span><i class="dot policy"></i> successor steps ranker</span><span><i class="dot exact"></i> handcrafted teacher</span><span><i class="dot sa"></i> simulated annealing</span></div>
+        <div class="legend"><span><i class="dot policy"></i> imitation policy</span><span><i class="dot exact"></i> handcrafted teacher</span><span><i class="dot sa"></i> simulated annealing</span></div>
       </article>
       <article class="card">
         <h2>Longest held-out chain</h2>
         <p>The curves show final assignments from the learned policy, teacher, and SA on the longest benchmark size.</p>
         <canvas id="instanceChart" width="760" height="360"></canvas>
-        <div class="legend"><span><i class="dot policy"></i> learned policy</span><span><i class="dot exact"></i> handcrafted teacher</span><span><i class="dot sa"></i> SA</span></div>
+        <div class="legend"><span><i class="dot policy"></i> imitation policy</span><span><i class="dot exact"></i> handcrafted teacher</span><span><i class="dot sa"></i> SA</span></div>
       </article>
     </section>
 
     <section class="card explanation">
-      <h2>1. Two-stage training protects the working components</h2>
-      <p>About 60% of the requested examples pretrain the repair-variable classifier and Gaussian proposal head. Those weights are then frozen. Ranker gradients never touch them, so a good proposal cannot be destroyed by later successor-value training.</p>
+      <h2>1. Variable selection stays with the proven GNN classifier</h2>
+      <p>Repair training states contain one or more violated chain constraints. The GNN classifies variable nodes that touch a violated constraint, matching the handcrafted heuristic's repair candidate set.</p>
     </section>
 
     <section class="card explanation">
-      <h2>2. The ranker sees the actual successor and the changed node</h2>
-      <p>Each candidate value is temporarily applied to the solver state. A separate GNN encodes that successor graph, and the ranker receives the selected variable's pre-message embedding, contextual embedding, the global solver node, and pooled graph context.</p>
+      <h2>2. Value selection is now just supervised regression</h2>
+      <p>The old toy-specific linear rule has been removed. A two-layer MLP receives the selected variable's normal node-feature vector and predicts the teacher mean value. Training uses plain mean-squared error. At execution the policy samples with the teacher's fixed σ=1.</p>
     </section>
 
     <section class="card explanation">
-      <h2>3. Whole candidate sets are supervised by teacher steps-to-go</h2>
-      <p>For each training state and selected variable, the engine generates the same candidate family used by search. Each successor is labeled with the mean number of teacher actions still needed to reach feasibility, using shared random seeds across candidates. Unsolved continuations receive a large penalty.</p>
+      <h2>3. The two heads cannot destabilize each other</h2>
+      <p>The repair GNN and numeric value MLP use separate optimizers and parameter sets. Value training does not change the repair encoder, and repair training does not change the value MLP. This keeps the toy focused on representational ability instead of multi-objective training interference.</p>
     </section>
 
     <section class="card explanation">
-      <h2>4. Regression + listwise ranking</h2>
-      <p>The network predicts remaining steps normalized by problem size. Training combines Huber regression with a listwise softmax loss that directly rewards the same candidate ordering used at inference. Diagnostics report <strong>stepsMAE</strong>, exact-best <strong>top1</strong>, pairwise ordering <strong>pairAcc</strong>, and the oracle target spread.</p>
+      <h2>4. No RL yet</h2>
+      <p>The only question here is whether a neural policy can reproduce the reference heuristic. If this works reliably, the same policy architecture can then be fine-tuned with a small RL objective based on solver improvement and move cost.</p>
     </section>
 
     <section class="card explanation">
       <h2>What would count as success?</h2>
-      <p>The oracle already established that exact successor ranking can solve the current candidate/action system. In this experiment we want pairwise accuracy and top-1 ranking to rise during the RANK phase, followed by a non-zero closed-loop solve rate around the trained chain sizes.</p>
+      <p>We want high variable-head F1, low value MAE, and a learned closed-loop solve rate close to the handcrafted heuristic around the trained sizes. If <strong>oracleEndpoints</strong> succeeds but the full policy does not, node selection is the issue. If <strong>oracleValue</strong> succeeds but the full policy does not, numeric value imitation is the issue.</p>
     </section>
 
     <section class="card explanation">
@@ -104,6 +104,6 @@
 
     <footer>Everything runs locally in your browser. No training data or model state is uploaded.</footer>
   </main>
-  <script type="module" src="app-gnn-ppo-loader.js?v=20260813-44"></script>
+  <script type="module" src="app-gnn-ppo-loader.js?v=20260813-45"></script>
 </body>
 </html>
