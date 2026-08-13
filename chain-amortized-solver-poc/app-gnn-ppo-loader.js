@@ -32,7 +32,7 @@ async function boot() {
 
     const platformNote = isAndroid ? ' · Android reliability mode' : '';
     if (statusEl) statusEl.textContent = `TensorFlow.js ready · backend: ${backend}${platformNote}. Loading absolute critic + oracle steps-to-go…`;
-    await import('./app-gnn-oracle-steps.js?v=20260813-40');
+    await import('./app-gnn-oracle-steps.js?v=20260813-41');
   } catch (err) {
     console.error(err);
     if (statusEl) statusEl.textContent = `Error initializing TensorFlow.js backend: ${err.message}`;
