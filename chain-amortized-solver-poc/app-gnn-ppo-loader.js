@@ -32,7 +32,7 @@ async function boot() {
 
     const platformNote = isAndroid ? ' · Android reliability mode' : '';
     if (statusEl) statusEl.textContent = `TensorFlow.js ready · backend: ${backend}${platformNote}. Loading supervised successor steps ranker…`;
-    await import('./app-gnn-successor-ranker-fixed.js?v=20260813-42');
+    await import('./app-gnn-successor-ranker-fixed.js?v=20260813-43');
   } catch (err) {
     console.error(err);
     if (statusEl) statusEl.textContent = `Error initializing TensorFlow.js backend: ${err.message}`;
