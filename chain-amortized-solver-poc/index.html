@@ -26,8 +26,8 @@
         <input id="trainMaxN" type="range" min="2" max="30" step="1" value="20" />
       </div>
       <div>
-        <label>Imitation examples <span id="episodesLabel">1000</span></label>
-        <input id="episodes" type="range" min="100" max="5000" step="100" value="1000" />
+        <label>Imitation examples <span id="episodesLabel">5000</span></label>
+        <input id="episodes" type="range" min="100" max="5000" step="100" value="5000" />
       </div>
       <div>
         <label for="messageRounds">Message-passing rounds</label>
@@ -73,8 +73,8 @@
     </section>
 
     <section class="card explanation">
-      <h2>4. Small training graphs now cover the numeric domain</h2>
-      <p>The root offset is randomized over the largest safe range for each chain length, leaving a fixed safety margin below 1000. This lets short training chains expose predecessor values throughout nearly the same numeric range as much longer test chains, while graph size itself remains held out.</p>
+      <h2>4. Small training graphs cover the numeric domain</h2>
+      <p>The root offset is randomized over the largest safe range for each chain length, leaving a fixed safety margin below 1000. Values are now normalized by the full 0–1000 domain before entering the GNN and for the regression target, so the learned numeric signal stays in roughly [0,1]. This lets short training chains cover the relevant numeric range while graph size itself remains held out.</p>
     </section>
 
     <section class="card explanation">
@@ -84,11 +84,11 @@
 
     <section class="card explanation">
       <h2>RL is disabled for this experiment</h2>
-      <p>First we re-establish pure imitation under the relational teacher with randomized absolute offsets. Once that works, RL can be added again without a positional or numeric-range shortcut.</p>
+      <p>First we re-establish pure imitation under the relational teacher with randomized absolute offsets and stable domain normalization. Once that works, RL can be added again without a positional or numeric-range shortcut.</p>
     </section>
 
     <footer>Everything runs locally in your browser. No training data or model state is uploaded.</footer>
   </main>
-  <script type="module" src="app-gnn-ppo-loader.js?v=20260813-48"></script>
+  <script type="module" src="app-gnn-ppo-loader.js?v=20260813-49"></script>
 </body>
 </html>
