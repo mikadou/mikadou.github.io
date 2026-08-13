@@ -1,33 +1,3 @@
-// Select a TensorFlow.js backend before loading the neighbor-based imitation experiment.
-async function boot() {
-  const statusEl = document.getElementById('status');
-  try {
-    if (!window.tf) throw new Error('TensorFlow.js did not load.');
-    const isAndroid = /Android/i.test(navigator.userAgent || '');
-    let backend = 'cpu';
-    if (isAndroid) {
-      await tf.setBackend('cpu');
-      await tf.ready();
-      backend = tf.getBackend();
-    } else {
-      if (tf.wasm?.setWasmPaths) tf.wasm.setWasmPaths('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/');
-      try {
-        const ok = await tf.setBackend('wasm');
-        if (!ok) throw new Error('WASM backend was not accepted.');
-        await tf.ready();
-        backend = tf.getBackend();
-      } catch (err) {
-        console.warn('WASM unavailable; using CPU.', err);
-        await tf.setBackend('cpu');
-        await tf.ready();
-        backend = tf.getBackend();
-      }
-    }
-    if (statusEl) statusEl.textContent = `TensorFlow.js ready · backend: ${backend}. Loading domain-normalized neighbor imitation solver…`;
-    await import('./app-gnn-neighbor-imitation.js?v=20260813-49');
-  } catch (err) {
-    console.error(err);
-    if (statusEl) statusEl.textContent = `Error initializing neighbor-based imitation solver: ${err.message}`;
-  }
-}
+function loadClassic(src){return new Promise((resolve,reject)=>{const s=document.createElement('script');s.src=src;s.async=false;s.onload=resolve;s.onerror=()=>reject(new Error(`Failed to load ${src}`));document.head.appendChild(s)})}
+async function boot(){const statusEl=document.getElementById('status');try{if(!window.tf)throw new Error('TensorFlow.js did not load.');const isAndroid=/Android/i.test(navigator.userAgent||'');let backend='cpu';if(isAndroid){await tf.setBackend('cpu');await tf.ready();backend=tf.getBackend()}else{if(tf.wasm?.setWasmPaths)tf.wasm.setWasmPaths('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/');try{const ok=await tf.setBackend('wasm');if(!ok)throw new Error('WASM backend was not accepted.');await tf.ready();backend=tf.getBackend()}catch(err){console.warn('WASM unavailable; using CPU.',err);await tf.setBackend('cpu');await tf.ready();backend=tf.getBackend()}}if(statusEl)statusEl.textContent=`TensorFlow.js ready · backend: ${backend}. Loading imitation + candidate critic…`;await loadClassic('./app-gnn-neighbor-imitation.js?v=20260813-50-base');await loadClassic('./app-gnn-simple-rl-extension.js?v=20260813-50-core');await loadClassic('./app-gnn-successor-ranker-fixed.js?v=20260813-50-train');await loadClassic('./app-gnn-successor-absolute.js?v=20260813-50-ui')}catch(err){console.error(err);if(statusEl)statusEl.textContent=`Error initializing candidate critic solver: ${err.message}`}}
 boot();
