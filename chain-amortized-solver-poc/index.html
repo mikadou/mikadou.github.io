@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Generic GNN Successor Critic + Step Cost</title>
+  <title>Generic GNN Successor Critic · Absolute Utility</title>
   <link rel="stylesheet" href="styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/tf-backend-wasm.js"></script>
@@ -12,8 +12,8 @@
   <main>
     <header>
       <p class="eyebrow">Proof of concept · generic learned solver actions</p>
-      <h1>Evaluate real successor graphs, while charging for every extra solver step</h1>
-      <p class="lede">For a selected variable, the learned proposal head generates candidate values. Each candidate is actually applied to a temporary copy of the solver state, exact immediate improvement is measured, every action pays a small compute cost, and a shared GNN critic evaluates the resulting successor graph. Actions are ranked by <code>Δobjective − step cost + γV(s′)</code>, so bad actions are recoverable but unnecessary recovery work is no longer free.</p>
+      <h1>Value real successor graphs by final solution quality minus future solver cost</h1>
+      <p class="lede">For a selected variable, the learned proposal head generates candidate values and each candidate is actually applied to a temporary solver state. The critic now predicts an <strong>absolute continuation value</strong>: final solution utility minus the solver actions still required from that successor. Candidate actions are ranked by <code>− step cost + V(s′)</code>. The objective remains visible in the successor graph, but future objective deltas are no longer accumulated as reward.</p>
     </header>
 
     <section class="card controls">
@@ -39,7 +39,7 @@
         </select>
       </div>
       <div class="buttons">
-        <button id="trainBtn">Train step-cost successor critic</button>
+        <button id="trainBtn">Train absolute-utility critic</button>
         <button id="benchmarkBtn" class="secondary" disabled>Run comparison</button>
       </div>
       <div id="status" class="status">TensorFlow.js is loading…</div>
@@ -50,7 +50,7 @@
       <article class="metric"><span>Teacher solve rate</span><strong id="heuristicSuccess">—</strong><small>at longest test length</small></article>
       <article class="metric"><span>SA solve rate</span><strong id="saSuccess">—</strong><small>at longest test length</small></article>
       <article class="metric"><span>Variable-head F1</span><strong id="candidateMass">—</strong><small>repair-node classification</small></article>
-      <article class="metric"><span>Critic return MAE</span><strong id="meanMae">—</strong><small>predicted vs rollout return</small></article>
+      <article class="metric"><span>Critic value MAE</span><strong id="meanMae">—</strong><small>predicted absolute continuation value vs rollout target</small></article>
       <article class="metric"><span>GNN choices</span><strong id="policyMoves">—</strong><small>median moves when solved</small></article>
       <article class="metric"><span>Teacher choices</span><strong id="heuristicMoves">—</strong><small>median moves when solved</small></article>
       <article class="metric"><span>SA effort</span><strong id="saEffort">—</strong><small>proposals / trial</small></article>
@@ -60,10 +60,10 @@
     <section class="grid two">
       <article class="card">
         <h2>Closed-loop solve rate</h2>
-        <p>Blue is the full successor-state policy, green is the handcrafted teacher, and orange is simulated annealing. The copied log also reports <strong>proposalOnly</strong>, <strong>oracleVariable</strong>, <strong>oracleValue</strong>, and <strong>myopicOnly</strong>. MyopicOnly uses the exact immediate reward but removes <code>V(s′)</code>, directly testing whether the critic adds long-horizon information.</p>
-        <p>Successor evaluation is more expensive than the previous action scorer, so the browser benchmark uses 6 trials below <code>n=40</code>, 3 trials for <code>40≤n&lt;80</code>, and 1 stress-test trial at <code>n≥80</code>. The log records the count explicitly; the expensive oracle-variable ablation is skipped at <code>n≥80</code>.</p>
+        <p>Blue is the full successor-state policy, green is the handcrafted teacher, and orange is simulated annealing. The copied log also reports <strong>proposalOnly</strong>, <strong>oracleVariable</strong>, <strong>oracleValue</strong>, and <strong>myopicOnly</strong>. MyopicOnly greedily uses the exact local objective change and ignores the critic; the full policy instead uses future solution utility minus cost-to-go.</p>
+        <p>Successor evaluation is expensive, so the browser benchmark uses 6 trials below <code>n=40</code>, 3 trials for <code>40≤n&lt;80</code>, and 1 stress-test trial at <code>n≥80</code>. The log records the count explicitly; the expensive oracle-variable ablation is skipped at <code>n≥80</code>.</p>
         <canvas id="scalingChart" width="760" height="360"></canvas>
-        <div class="legend"><span><i class="dot policy"></i> successor critic + step cost</span><span><i class="dot exact"></i> handcrafted teacher</span><span><i class="dot sa"></i> simulated annealing</span></div>
+        <div class="legend"><span><i class="dot policy"></i> absolute-utility successor critic</span><span><i class="dot exact"></i> handcrafted teacher</span><span><i class="dot sa"></i> simulated annealing</span></div>
       </article>
       <article class="card">
         <h2>Longest held-out chain</h2>
@@ -75,27 +75,28 @@
 
     <section class="card explanation">
       <h2>1. The solver transition is executed, not imagined</h2>
-      <p>For candidate <code>(i,v)</code>, the engine clones the current state, applies <code>xᵢ=v</code>, and rebuilds the graph from that successor. In a real CP/MIP adapter, this is the extension point where propagation, domain changes, soft-constraint updates, and objective recomputation would occur. The neural network therefore evaluates the consequences that the solver actually produced.</p>
+      <p>For candidate <code>(i,v)</code>, the engine clones the current state, applies <code>xᵢ=v</code>, and rebuilds the graph from that successor. In a real CP/MIP adapter, this is where propagation, domain changes, soft-constraint updates, and objective recomputation occur. The critic therefore evaluates consequences that the solver actually produced.</p>
     </section>
 
     <section class="card explanation">
-      <h2>2. Exact immediate reward + explicit action cost + learned future value</h2>
-      <p>The action score is <code>Δobjective − 0.02 + 0.995·V(s′)</code>, with the usual terminal success bonus. The same <code>−0.02</code> cost is charged on every action in the teacher continuation used to train the critic. A successor that can eventually be repaired is therefore still valuable, but one that needs many extra repairs receives a lower return.</p>
+      <h2>2. V(s) predicts absolute final utility minus future compute</h2>
+      <p>For this feasibility PoC, a continuation that reaches a valid chain gets final utility <code>1</code>. Every subsequent solver action costs <code>0.02</code>. The critic target is therefore <code>1 − 0.02 × future steps</code> when the teacher solves, or only the accumulated negative action cost when the practical rollout guard is exhausted unsolved.</p>
+      <p>We no longer sum future objective improvements. A terrible state cannot look valuable merely because it has more room to improve.</p>
     </section>
 
     <section class="card explanation">
-      <h2>3. Cost-to-go, not a fixed remaining budget</h2>
-      <p>The global solver node still carries assignment progress, observed violation rate, violation magnitude, and the adapter-reported objective/quality. There is no required remaining-budget feature in this version. Efficiency is represented directly in the return through per-action compute cost, which is closer to an anytime solver that may keep searching while additional work remains worthwhile.</p>
+      <h2>3. The objective remains state information</h2>
+      <p>The global solver node carries assignment progress, observed violation rate, violation magnitude, and the adapter-reported objective/quality. These features help the critic estimate how expensive recovery will be, but they are not repeatedly paid out as future reward. There is no required remaining-budget feature in this version.</p>
     </section>
 
     <section class="card explanation">
       <h2>4. Proposal learning remains separate</h2>
-      <p>The Gaussian <code>(μ,σ)</code> head is still only a proposal mechanism trained from demonstrations, with DAgger-style learner-state coverage. It is not the final decision rule. The final value choice is made after candidate execution by successor-state evaluation, so the architecture is free to prefer multimodal or highly state-dependent values.</p>
+      <p>The Gaussian <code>(μ,σ)</code> head is still only a proposal mechanism trained from demonstrations, with DAgger-style learner-state coverage. It is not the final decision rule. Candidate values are temporarily executed and the resulting states are compared by the shared critic.</p>
     </section>
 
     <section class="card explanation">
       <h2>What this experiment tests</h2>
-      <p>The previous critic learned that many bad states were eventually recoverable. This version asks a sharper question: can it learn that some recoverable states are still worse because they consume more future solver actions? If the full policy beats <strong>myopicOnly</strong>, the critic is adding useful cost-to-go information rather than merely reproducing immediate objective changes.</p>
+      <p>The previous critic assigned higher value to increasingly damaged states because repairing them produced more cumulative positive objective delta. This version removes that loophole. The diagnostic log additionally reports <strong>criticTargetSpread</strong>: if candidate successor targets genuinely differ while <strong>successorRankHit</strong> remains low, the bottleneck is critic discrimination rather than the target definition.</p>
     </section>
 
     <section class="card explanation">
@@ -105,6 +106,6 @@
 
     <footer>Everything runs locally in your browser. No training data or model state is uploaded.</footer>
   </main>
-  <script type="module" src="app-gnn-ppo-loader.js?v=20260813-38"></script>
+  <script type="module" src="app-gnn-ppo-loader.js?v=20260813-39"></script>
 </body>
 </html>
