@@ -1,10 +1,20 @@
-// Select a TensorFlow.js backend before the simple behavioral-cloning solver is evaluated.
-// Android Chrome uses CPU directly for reliability; other platforms prefer WASM.
+// Select a TensorFlow.js backend, then load the simple imitation solver and its REINFORCE extension
+// as classic scripts so the extension can reuse the exact same policy functions/parameters.
+function loadClassicScript(src) {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = src;
+    script.async = false;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error(`Failed to load ${src}`));
+    document.head.appendChild(script);
+  });
+}
+
 async function boot() {
   const statusEl = document.getElementById('status');
   try {
     if (!window.tf) throw new Error('TensorFlow.js did not load.');
-
     const ua = navigator.userAgent || '';
     const isAndroid = /Android/i.test(ua);
     let backend = 'cpu';
@@ -31,11 +41,12 @@ async function boot() {
     }
 
     const platformNote = isAndroid ? ' · Android reliability mode' : '';
-    if (statusEl) statusEl.textContent = `TensorFlow.js ready · backend: ${backend}${platformNote}. Loading simple imitation solver…`;
-    await import('./app-gnn-simple-imitation.js?v=20260813-45');
+    if (statusEl) statusEl.textContent = `TensorFlow.js ready · backend: ${backend}${platformNote}. Loading imitation + REINFORCE solver…`;
+    await loadClassicScript('./app-gnn-simple-imitation.js?v=20260813-45-base');
+    await loadClassicScript('./app-gnn-simple-rl-extension.js?v=20260813-46');
   } catch (err) {
     console.error(err);
-    if (statusEl) statusEl.textContent = `Error initializing simple imitation solver: ${err.message}`;
+    if (statusEl) statusEl.textContent = `Error initializing imitation + RL solver: ${err.message}`;
   }
 }
 
