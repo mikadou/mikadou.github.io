@@ -61,7 +61,7 @@
       <article class="card">
         <h2>Closed-loop solve rate</h2>
         <p>Blue is the full successor-state policy, green is the handcrafted teacher, and orange is simulated annealing. The copied log also reports <strong>proposalOnly</strong>, <strong>oracleVariable</strong>, <strong>oracleValue</strong>, <strong>myopicOnly</strong>, and after the normal benchmark an <strong>ORACLE_STEPS</strong> control. OracleSteps keeps the learned proposal candidate pool and learned repair-variable selector, but replaces the critic with direct teacher rollouts from every successor candidate.</p>
-        <p>The normal successor benchmark uses 6 trials below <code>n=40</code>, 3 trials for <code>40≤n&lt;80</code>, and 1 stress-test trial at <code>n≥80</code>. The additional oracle is intentionally limited to sizes through <code>n=40</code>: 3 trials around <code>n=20/21</code> and 1 trial above that. Each candidate is evaluated with 5 independent teacher continuations to reduce noise.</p>
+        <p>The normal successor benchmark uses 6 trials below <code>n=40</code>, 3 trials for <code>40≤n&lt;80</code>, and 1 stress-test trial at <code>n≥80</code>. The additional oracle is intentionally limited to sizes through <code>n=40</code>: 3 trials around <code>n=20/21</code> and 1 trial above that. Each candidate is evaluated with 5 teacher continuations using the same random seeds across candidates for lower-noise comparisons.</p>
         <canvas id="scalingChart" width="760" height="360"></canvas>
         <div class="legend"><span><i class="dot policy"></i> absolute-utility successor critic</span><span><i class="dot exact"></i> handcrafted teacher</span><span><i class="dot sa"></i> simulated annealing</span></div>
       </article>
@@ -112,6 +112,6 @@
 
     <footer>Everything runs locally in your browser. No training data or model state is uploaded.</footer>
   </main>
-  <script type="module" src="app-gnn-ppo-loader.js?v=20260813-40"></script>
+  <script type="module" src="app-gnn-ppo-loader.js?v=20260813-41"></script>
 </body>
 </html>
