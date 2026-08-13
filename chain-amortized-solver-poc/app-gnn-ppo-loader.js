@@ -1,4 +1,4 @@
-// Select a TensorFlow.js backend before the supervised successor steps-to-go ranker is evaluated.
+// Select a TensorFlow.js backend before the simple behavioral-cloning solver is evaluated.
 // Android Chrome uses CPU directly for reliability; other platforms prefer WASM.
 async function boot() {
   const statusEl = document.getElementById('status');
@@ -31,11 +31,11 @@ async function boot() {
     }
 
     const platformNote = isAndroid ? ' · Android reliability mode' : '';
-    if (statusEl) statusEl.textContent = `TensorFlow.js ready · backend: ${backend}${platformNote}. Loading supervised successor steps ranker…`;
-    await import('./app-gnn-successor-ranker-fixed.js?v=20260813-44');
+    if (statusEl) statusEl.textContent = `TensorFlow.js ready · backend: ${backend}${platformNote}. Loading simple imitation solver…`;
+    await import('./app-gnn-simple-imitation.js?v=20260813-45');
   } catch (err) {
     console.error(err);
-    if (statusEl) statusEl.textContent = `Error initializing TensorFlow.js backend: ${err.message}`;
+    if (statusEl) statusEl.textContent = `Error initializing simple imitation solver: ${err.message}`;
   }
 }
 
