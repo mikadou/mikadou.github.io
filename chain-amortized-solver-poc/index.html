@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Generic GNN Successor Critic · Oracle Steps</title>
+  <title>Generic GNN Successor Steps-to-Go Ranker</title>
   <link rel="stylesheet" href="styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/tf-backend-wasm.js"></script>
@@ -12,8 +12,8 @@
   <main>
     <header>
       <p class="eyebrow">Proof of concept · generic learned solver actions</p>
-      <h1>Value real successor graphs by final solution quality minus future solver cost</h1>
-      <p class="lede">For a selected variable, the learned proposal head generates candidate values and each candidate is actually applied to a temporary solver state. The critic predicts an <strong>absolute continuation value</strong>: final solution utility minus the solver actions still required from that successor. The benchmark now also includes an <strong>oracleStepsToGo</strong> control that uses the same candidate pool but ranks candidates by measured teacher recovery steps instead of the learned critic.</p>
+      <h1>Learn to rank real successor graphs by remaining solver steps</h1>
+      <p class="lede">The successful oracle showed that the existing candidate pool and action abstraction are sufficient. This version directly imitates that oracle: first train variable selection and value proposal, freeze them, then train a separate GNN ranker on whole successor candidate sets labeled by teacher-measured steps-to-go.</p>
     </header>
 
     <section class="card controls">
@@ -26,7 +26,7 @@
         <input id="trainMaxN" type="range" min="2" max="30" step="1" value="20" />
       </div>
       <div>
-        <label>Training states <span id="episodesLabel">1000</span></label>
+        <label>Training examples <span id="episodesLabel">1000</span></label>
         <input id="episodes" type="range" min="100" max="5000" step="100" value="1000" />
       </div>
       <div>
@@ -39,7 +39,7 @@
         </select>
       </div>
       <div class="buttons">
-        <button id="trainBtn">Train absolute-utility critic</button>
+        <button id="trainBtn">Train steps-to-go ranker</button>
         <button id="benchmarkBtn" class="secondary" disabled>Run comparison</button>
       </div>
       <div id="status" class="status">TensorFlow.js is loading…</div>
@@ -50,7 +50,7 @@
       <article class="metric"><span>Teacher solve rate</span><strong id="heuristicSuccess">—</strong><small>at longest test length</small></article>
       <article class="metric"><span>SA solve rate</span><strong id="saSuccess">—</strong><small>at longest test length</small></article>
       <article class="metric"><span>Variable-head F1</span><strong id="candidateMass">—</strong><small>repair-node classification</small></article>
-      <article class="metric"><span>Critic value MAE</span><strong id="meanMae">—</strong><small>predicted absolute continuation value vs rollout target</small></article>
+      <article class="metric"><span>Steps-to-go MAE</span><strong id="meanMae">—</strong><small>predicted vs teacher continuation steps</small></article>
       <article class="metric"><span>GNN choices</span><strong id="policyMoves">—</strong><small>median moves when solved</small></article>
       <article class="metric"><span>Teacher choices</span><strong id="heuristicMoves">—</strong><small>median moves when solved</small></article>
       <article class="metric"><span>SA effort</span><strong id="saEffort">—</strong><small>proposals / trial</small></article>
@@ -60,10 +60,9 @@
     <section class="grid two">
       <article class="card">
         <h2>Closed-loop solve rate</h2>
-        <p>Blue is the full successor-state policy, green is the handcrafted teacher, and orange is simulated annealing. The copied log also reports <strong>proposalOnly</strong>, <strong>oracleVariable</strong>, <strong>oracleValue</strong>, <strong>myopicOnly</strong>, and after the normal benchmark an <strong>ORACLE_STEPS</strong> control. OracleSteps keeps the learned proposal candidate pool and learned repair-variable selector, but replaces the critic with direct teacher rollouts from every successor candidate.</p>
-        <p>The normal successor benchmark uses 6 trials below <code>n=40</code>, 3 trials for <code>40≤n&lt;80</code>, and 1 stress-test trial at <code>n≥80</code>. The additional oracle is intentionally limited to sizes through <code>n=40</code>: 3 trials around <code>n=20/21</code> and 1 trial above that. Each candidate is evaluated with 5 teacher continuations using the same random seeds across candidates for lower-noise comparisons.</p>
+        <p>The learned policy now chooses candidate values by <strong>minimum predicted remaining solver steps</strong>. The log still reports <strong>proposalOnly</strong>, <strong>oracleVariable</strong>, <strong>oracleValue</strong>, <strong>myopicOnly</strong>, and a small <strong>ORACLE_STEPS</strong> upper-bound check.</p>
         <canvas id="scalingChart" width="760" height="360"></canvas>
-        <div class="legend"><span><i class="dot policy"></i> absolute-utility successor critic</span><span><i class="dot exact"></i> handcrafted teacher</span><span><i class="dot sa"></i> simulated annealing</span></div>
+        <div class="legend"><span><i class="dot policy"></i> successor steps ranker</span><span><i class="dot exact"></i> handcrafted teacher</span><span><i class="dot sa"></i> simulated annealing</span></div>
       </article>
       <article class="card">
         <h2>Longest held-out chain</h2>
@@ -74,35 +73,28 @@
     </section>
 
     <section class="card explanation">
-      <h2>1. The solver transition is executed, not imagined</h2>
-      <p>For candidate <code>(i,v)</code>, the engine clones the current state, applies <code>xᵢ=v</code>, and rebuilds the graph from that successor. In a real CP/MIP adapter, this is where propagation, domain changes, soft-constraint updates, and objective recomputation occur. The critic therefore evaluates consequences that the solver actually produced.</p>
+      <h2>1. Two-stage training protects the working components</h2>
+      <p>About 60% of the requested examples pretrain the repair-variable classifier and Gaussian proposal head. Those weights are then frozen. Ranker gradients never touch them, so a good proposal cannot be destroyed by later successor-value training.</p>
     </section>
 
     <section class="card explanation">
-      <h2>2. V(s) predicts absolute final utility minus future compute</h2>
-      <p>For this feasibility PoC, a continuation that reaches a valid chain gets final utility <code>1</code>. Every subsequent solver action costs <code>0.02</code>. The critic target is therefore <code>1 − 0.02 × future steps</code> when the teacher solves, or only the accumulated negative action cost when the practical rollout guard is exhausted unsolved.</p>
-      <p>We no longer sum future objective improvements. A terrible state cannot look valuable merely because it has more room to improve.</p>
+      <h2>2. The ranker sees the actual successor and the changed node</h2>
+      <p>Each candidate value is temporarily applied to the solver state. A separate GNN encodes that successor graph, and the ranker receives the selected variable's pre-message embedding, contextual embedding, the global solver node, and pooled graph context.</p>
     </section>
 
     <section class="card explanation">
-      <h2>3. Oracle steps-to-go tests the candidate/action abstraction directly</h2>
-      <p>For every proposed value, <code>oracleStepsToGo</code> temporarily applies the candidate and then runs the handcrafted teacher from that successor several times. It chooses the value with the lowest mean remaining number of teacher moves. No learned critic participates in this choice.</p>
-      <p>If <strong>ORACLE_STEPS</strong> succeeds at <code>n=20</code> while the GNN does not, the proposal pool and one-variable action abstraction are sufficient and the remaining problem is learning the successor ranking. If the oracle also fails, training the critic longer cannot solve the underlying candidate/action limitation.</p>
+      <h2>3. Whole candidate sets are supervised by teacher steps-to-go</h2>
+      <p>For each training state and selected variable, the engine generates the same candidate family used by search. Each successor is labeled with the mean number of teacher actions still needed to reach feasibility, using shared random seeds across candidates. Unsolved continuations receive a large penalty.</p>
     </section>
 
     <section class="card explanation">
-      <h2>4. The objective remains state information</h2>
-      <p>The global solver node carries assignment progress, observed violation rate, violation magnitude, and the adapter-reported objective/quality. These features help the critic estimate how expensive recovery will be, but they are not repeatedly paid out as future reward. There is no required remaining-budget feature in this version.</p>
+      <h2>4. Regression + listwise ranking</h2>
+      <p>The network predicts remaining steps normalized by problem size. Training combines Huber regression with a listwise softmax loss that directly rewards the same candidate ordering used at inference. Diagnostics report <strong>stepsMAE</strong>, exact-best <strong>top1</strong>, pairwise ordering <strong>pairAcc</strong>, and the oracle target spread.</p>
     </section>
 
     <section class="card explanation">
-      <h2>5. Proposal learning remains separate</h2>
-      <p>The Gaussian <code>(μ,σ)</code> head is still only a proposal mechanism trained from demonstrations, with DAgger-style learner-state coverage. It is not the final decision rule. Candidate values are temporarily executed and the resulting states are compared by the shared critic or, for the oracle control, by measured recovery steps.</p>
-    </section>
-
-    <section class="card explanation">
-      <h2>What this experiment tests</h2>
-      <p>The diagnostic log reports <strong>criticTargetSpread</strong>, <strong>successorRankHit</strong>, and now <strong>ORACLE_STEPS</strong>. Together they separate three questions: do successor candidates actually differ in future cost, can the learned critic rank those differences, and would exact ranking of the existing candidate pool be enough to solve the chain?</p>
+      <h2>What would count as success?</h2>
+      <p>The oracle already established that exact successor ranking can solve the current candidate/action system. In this experiment we want pairwise accuracy and top-1 ranking to rise during the RANK phase, followed by a non-zero closed-loop solve rate around the trained chain sizes.</p>
     </section>
 
     <section class="card explanation">
@@ -112,6 +104,6 @@
 
     <footer>Everything runs locally in your browser. No training data or model state is uploaded.</footer>
   </main>
-  <script type="module" src="app-gnn-ppo-loader.js?v=20260813-41"></script>
+  <script type="module" src="app-gnn-ppo-loader.js?v=20260813-42"></script>
 </body>
 </html>
