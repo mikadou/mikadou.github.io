@@ -23,8 +23,8 @@ async function boot() {
         backend = tf.getBackend();
       }
     }
-    if (statusEl) statusEl.textContent = `TensorFlow.js ready · backend: ${backend}. Loading randomized-offset neighbor imitation solver…`;
-    await import('./app-gnn-neighbor-imitation.js?v=20260813-48');
+    if (statusEl) statusEl.textContent = `TensorFlow.js ready · backend: ${backend}. Loading domain-normalized neighbor imitation solver…`;
+    await import('./app-gnn-neighbor-imitation.js?v=20260813-49');
   } catch (err) {
     console.error(err);
     if (statusEl) statusEl.textContent = `Error initializing neighbor-based imitation solver: ${err.message}`;
