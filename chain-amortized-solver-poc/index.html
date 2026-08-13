@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Generic GNN Successor Critic · Absolute Utility</title>
+  <title>Generic GNN Successor Critic · Oracle Steps</title>
   <link rel="stylesheet" href="styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/tf-backend-wasm.js"></script>
@@ -13,7 +13,7 @@
     <header>
       <p class="eyebrow">Proof of concept · generic learned solver actions</p>
       <h1>Value real successor graphs by final solution quality minus future solver cost</h1>
-      <p class="lede">For a selected variable, the learned proposal head generates candidate values and each candidate is actually applied to a temporary solver state. The critic now predicts an <strong>absolute continuation value</strong>: final solution utility minus the solver actions still required from that successor. Candidate actions are ranked by <code>− step cost + V(s′)</code>. The objective remains visible in the successor graph, but future objective deltas are no longer accumulated as reward.</p>
+      <p class="lede">For a selected variable, the learned proposal head generates candidate values and each candidate is actually applied to a temporary solver state. The critic predicts an <strong>absolute continuation value</strong>: final solution utility minus the solver actions still required from that successor. The benchmark now also includes an <strong>oracleStepsToGo</strong> control that uses the same candidate pool but ranks candidates by measured teacher recovery steps instead of the learned critic.</p>
     </header>
 
     <section class="card controls">
@@ -60,8 +60,8 @@
     <section class="grid two">
       <article class="card">
         <h2>Closed-loop solve rate</h2>
-        <p>Blue is the full successor-state policy, green is the handcrafted teacher, and orange is simulated annealing. The copied log also reports <strong>proposalOnly</strong>, <strong>oracleVariable</strong>, <strong>oracleValue</strong>, and <strong>myopicOnly</strong>. MyopicOnly greedily uses the exact local objective change and ignores the critic; the full policy instead uses future solution utility minus cost-to-go.</p>
-        <p>Successor evaluation is expensive, so the browser benchmark uses 6 trials below <code>n=40</code>, 3 trials for <code>40≤n&lt;80</code>, and 1 stress-test trial at <code>n≥80</code>. The log records the count explicitly; the expensive oracle-variable ablation is skipped at <code>n≥80</code>.</p>
+        <p>Blue is the full successor-state policy, green is the handcrafted teacher, and orange is simulated annealing. The copied log also reports <strong>proposalOnly</strong>, <strong>oracleVariable</strong>, <strong>oracleValue</strong>, <strong>myopicOnly</strong>, and after the normal benchmark an <strong>ORACLE_STEPS</strong> control. OracleSteps keeps the learned proposal candidate pool and learned repair-variable selector, but replaces the critic with direct teacher rollouts from every successor candidate.</p>
+        <p>The normal successor benchmark uses 6 trials below <code>n=40</code>, 3 trials for <code>40≤n&lt;80</code>, and 1 stress-test trial at <code>n≥80</code>. The additional oracle is intentionally limited to sizes through <code>n=40</code>: 3 trials around <code>n=20/21</code> and 1 trial above that. Each candidate is evaluated with 5 independent teacher continuations to reduce noise.</p>
         <canvas id="scalingChart" width="760" height="360"></canvas>
         <div class="legend"><span><i class="dot policy"></i> absolute-utility successor critic</span><span><i class="dot exact"></i> handcrafted teacher</span><span><i class="dot sa"></i> simulated annealing</span></div>
       </article>
@@ -85,18 +85,24 @@
     </section>
 
     <section class="card explanation">
-      <h2>3. The objective remains state information</h2>
+      <h2>3. Oracle steps-to-go tests the candidate/action abstraction directly</h2>
+      <p>For every proposed value, <code>oracleStepsToGo</code> temporarily applies the candidate and then runs the handcrafted teacher from that successor several times. It chooses the value with the lowest mean remaining number of teacher moves. No learned critic participates in this choice.</p>
+      <p>If <strong>ORACLE_STEPS</strong> succeeds at <code>n=20</code> while the GNN does not, the proposal pool and one-variable action abstraction are sufficient and the remaining problem is learning the successor ranking. If the oracle also fails, training the critic longer cannot solve the underlying candidate/action limitation.</p>
+    </section>
+
+    <section class="card explanation">
+      <h2>4. The objective remains state information</h2>
       <p>The global solver node carries assignment progress, observed violation rate, violation magnitude, and the adapter-reported objective/quality. These features help the critic estimate how expensive recovery will be, but they are not repeatedly paid out as future reward. There is no required remaining-budget feature in this version.</p>
     </section>
 
     <section class="card explanation">
-      <h2>4. Proposal learning remains separate</h2>
-      <p>The Gaussian <code>(μ,σ)</code> head is still only a proposal mechanism trained from demonstrations, with DAgger-style learner-state coverage. It is not the final decision rule. Candidate values are temporarily executed and the resulting states are compared by the shared critic.</p>
+      <h2>5. Proposal learning remains separate</h2>
+      <p>The Gaussian <code>(μ,σ)</code> head is still only a proposal mechanism trained from demonstrations, with DAgger-style learner-state coverage. It is not the final decision rule. Candidate values are temporarily executed and the resulting states are compared by the shared critic or, for the oracle control, by measured recovery steps.</p>
     </section>
 
     <section class="card explanation">
       <h2>What this experiment tests</h2>
-      <p>The previous critic assigned higher value to increasingly damaged states because repairing them produced more cumulative positive objective delta. This version removes that loophole. The diagnostic log additionally reports <strong>criticTargetSpread</strong>: if candidate successor targets genuinely differ while <strong>successorRankHit</strong> remains low, the bottleneck is critic discrimination rather than the target definition.</p>
+      <p>The diagnostic log reports <strong>criticTargetSpread</strong>, <strong>successorRankHit</strong>, and now <strong>ORACLE_STEPS</strong>. Together they separate three questions: do successor candidates actually differ in future cost, can the learned critic rank those differences, and would exact ranking of the existing candidate pool be enough to solve the chain?</p>
     </section>
 
     <section class="card explanation">
@@ -106,6 +112,6 @@
 
     <footer>Everything runs locally in your browser. No training data or model state is uploaded.</footer>
   </main>
-  <script type="module" src="app-gnn-ppo-loader.js?v=20260813-39"></script>
+  <script type="module" src="app-gnn-ppo-loader.js?v=20260813-40"></script>
 </body>
 </html>
