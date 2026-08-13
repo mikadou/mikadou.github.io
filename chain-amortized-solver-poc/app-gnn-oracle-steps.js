@@ -39,7 +39,7 @@ async function bootOracleStepsVariant() {
     '  if (terminalUtility(successor)) return 0;',
     '  let total = 0;',
     '  for (let r = 0; r < ORACLE_STEPS_ROLLOUTS; r++) {',
-    '    const seed = (seedBase ^ Math.imul((value + 1009) >>> 0, 2654435761) ^ Math.imul(r + 1, 1013904223)) >>> 0;',
+    '    const seed = (seedBase ^ Math.imul(r + 1, 1013904223)) >>> 0;',
     '    total += teacherStepsToGo(successor, mulberry32(seed));',
     '  }',
     '  return total / ORACLE_STEPS_ROLLOUTS;',
