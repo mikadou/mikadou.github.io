@@ -1,4 +1,4 @@
-// Select a TensorFlow.js backend before the absolute-utility successor-state critic + oracle control is evaluated.
+// Select a TensorFlow.js backend before the supervised successor steps-to-go ranker is evaluated.
 // Android Chrome uses CPU directly for reliability; other platforms prefer WASM.
 async function boot() {
   const statusEl = document.getElementById('status');
@@ -31,8 +31,8 @@ async function boot() {
     }
 
     const platformNote = isAndroid ? ' · Android reliability mode' : '';
-    if (statusEl) statusEl.textContent = `TensorFlow.js ready · backend: ${backend}${platformNote}. Loading absolute critic + oracle steps-to-go…`;
-    await import('./app-gnn-oracle-steps.js?v=20260813-41');
+    if (statusEl) statusEl.textContent = `TensorFlow.js ready · backend: ${backend}${platformNote}. Loading supervised successor steps ranker…`;
+    await import('./app-gnn-successor-ranker-fixed.js?v=20260813-42');
   } catch (err) {
     console.error(err);
     if (statusEl) statusEl.textContent = `Error initializing TensorFlow.js backend: ${err.message}`;
